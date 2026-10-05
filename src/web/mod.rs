@@ -4,22 +4,30 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::get;
+use axum::routing::{get, put};
 use tokio_util::sync::CancellationToken;
 
 use crate::state::hub::Hub;
+use crate::store::Store;
 
 pub mod api;
 pub mod assets;
 pub mod guard;
 pub mod headers;
+pub mod meta;
 
 #[derive(Clone)]
 pub struct AppState {
     pub hub: Arc<Hub>,
     pub port: u16,
     pub shutdown: CancellationToken,
+    /// Where user metadata is persisted (none: kept in memory only).
+    pub store: Option<Arc<Store>>,
+    /// Serialises the read-modify-write-commit of `PUT .../meta`, so overlapping
+    /// edits of different fields cannot revert each other.
+    pub meta_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -28,7 +36,14 @@ impl AppState {
             hub,
             port,
             shutdown,
+            store: None,
+            meta_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    pub fn with_store(mut self, store: Arc<Store>) -> Self {
+        self.store = Some(store);
+        self
     }
 }
 
@@ -37,6 +52,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/devices", get(api::devices))
         .route("/api/status", get(api::status))
         .route("/api/events", get(api::events))
+        .route(
+            "/api/devices/{id}/meta",
+            put(api::put_meta)
+                .layer(DefaultBodyLimit::max(meta::MAX_BODY_BYTES))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    guard::mutation_guard,
+                )),
+        )
         .fallback(assets::serve)
         .layer(middleware::from_fn_with_state(state.clone(), guard::guard))
         // Outermost, so rejected requests also get the security headers.

@@ -1,6 +1,6 @@
 //! The scan loop: collect observations, merge, publish.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
@@ -11,13 +11,19 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::discovery::arp_parse::ArpEntry;
+use crate::discovery::enrich::{EnrichInput, EnrichOptions, Enricher};
 use crate::discovery::keyed::Keyed;
 use crate::discovery::mdns::{MdnsService, MdnsSource, collect_mdns};
-use crate::discovery::ping::{PingMethod, Verdict, classify_failure, sweep_binary, sweep_dgram};
+use crate::discovery::ping::{
+    PingMethod, Verdict, classify_failure, os_hint_from_ttl, sweep_binary, sweep_dgram,
+};
 use crate::discovery::ssdp::ssdp_outcome;
 use crate::discovery::tcp_probe;
 use crate::enrich::oui::OuiDb;
-use crate::model::{Device, DeviceEvent, DeviceMap, MacAddr, MdnsHit, ScanStatus, SsdpObservation};
+use crate::model::{
+    Device, DeviceEvent, DeviceMap, HostInfo, MacAddr, MdnsHit, ScanStatus, SsdpObservation,
+    UserMeta,
+};
 use crate::net::iface_select::Selected;
 use crate::net::subnet::enumerate_targets;
 use crate::state::hub::Hub;
@@ -34,6 +40,8 @@ pub struct Collected {
     pub mdns: Vec<MdnsHit>,
     pub ssdp: Vec<SsdpObservation>,
     pub local_macs: BTreeSet<MacAddr>,
+    /// Ping RTT/TTL plus whatever the enrichment sources learned, per IP.
+    pub host_info: std::collections::BTreeMap<Ipv4Addr, HostInfo>,
     pub mdns_available: bool,
     pub ping_method: String,
     pub warnings: Vec<String>,
@@ -55,6 +63,7 @@ impl Default for Collected {
             mdns: vec![],
             ssdp: vec![],
             local_macs: BTreeSet::new(),
+            host_info: std::collections::BTreeMap::new(),
             mdns_available: false,
             ping_method: String::new(),
             warnings: vec![],
@@ -188,6 +197,22 @@ impl Scanner {
             }
         }
         self.baseline_at = baseline;
+        // The user's names for this network's devices become the hub's truth.
+        let user_meta: std::collections::BTreeMap<String, UserMeta> = restored
+            .iter()
+            .filter(|(_, d)| d.custom_name.is_some() || d.notes.is_some())
+            .map(|(id, d)| {
+                (
+                    id.clone(),
+                    UserMeta {
+                        custom_name: d.custom_name.clone(),
+                        notes: d.notes.clone(),
+                    },
+                )
+            })
+            .collect();
+        self.hub.load_user_meta(user_meta);
+        self.hub.set_network_id(Some(nid.clone()));
         let ctx = self.merge_ctx(now);
         // Merging nothing normalises the restored devices (self, gateway, kinds, online state).
         let (map, _) = merge(&restored, &ScanInputs::new(sel.clone(), now), &ctx);
@@ -200,7 +225,25 @@ impl Scanner {
         let (Some(store), Some(nid)) = (self.store.clone(), self.network_id.clone()) else {
             return;
         };
-        let devices: Vec<Device> = self.prev.values().cloned().collect();
+        // mDNS-TXT-only identity is unverified (mdns-sd does not expose the packet
+        // source), so it is shown live but never written to the database.
+        let devices: Vec<Device> = self
+            .prev
+            .values()
+            .cloned()
+            .map(|mut d| {
+                if d.txt_sourced.friendly_name {
+                    d.friendly_name = None;
+                }
+                if d.txt_sourced.manufacturer {
+                    d.manufacturer = None;
+                }
+                if d.txt_sourced.model {
+                    d.model = None;
+                }
+                d
+            })
+            .collect();
         let r = tokio::task::spawn_blocking(move || {
             store.upsert_many(&nid, &devices)?;
             if let Some(b) = baseline_to_set {
@@ -216,6 +259,17 @@ impl Scanner {
                 warnings.push(format!("history not saved: {e}"));
             }
             Err(e) => warnings.push(format!("history not saved: {e}")),
+        }
+    }
+
+    /// Copy the user's current names/notes onto our map, so that comparing it
+    /// with what clients hold never "reverts" an edit made since the last cycle.
+    fn overlay_user_meta(&mut self) {
+        for (id, m) in self.hub.user_meta_snapshot() {
+            if let Some(d) = self.prev.get_mut(&id) {
+                d.custom_name = m.custom_name;
+                d.notes = m.notes;
+            }
         }
     }
 
@@ -245,6 +299,7 @@ impl Scanner {
                     let (next, _) =
                         merge(&self.prev, &ScanInputs::new(sel, now), &self.merge_ctx(now));
                     self.prev = next;
+                    self.overlay_user_meta();
                 }
                 let events = self.events_vs_hub();
                 let mut status = self.hub.snapshot().status.unwrap_or_default();
@@ -278,8 +333,10 @@ impl Scanner {
         inputs.mdns = collected.mdns;
         inputs.ssdp = collected.ssdp;
         inputs.local_macs = collected.local_macs;
+        inputs.host_info = collected.host_info;
         let (next, _) = merge(&self.prev, &inputs, &self.merge_ctx(now));
         self.prev = next;
+        self.overlay_user_meta();
         let events = self.events_vs_hub();
 
         let mut warnings = collected.warnings;
@@ -350,29 +407,44 @@ pub fn now_ms() -> i64 {
 pub const LOCAL_NETWORK_HINT: &str = "macOS appears to be blocking access to the local network. Open System Settings > Privacy & Security > Local Network and enable the app you launched rhizome from (Terminal, iTerm, VS Code, ...), then restart rhizome.";
 
 /// The real collector: ping sweep (fills the ARP cache), then ARP, then TCP probes.
+/// Settings for the real collector.
+#[derive(Clone, Debug)]
+pub struct LiveOptions {
+    pub iface_override: Option<String>,
+    pub max_hosts: usize,
+    pub tcp_probe: bool,
+    pub netbios: bool,
+    pub dns: bool,
+    pub upnp: bool,
+    /// mDNS entries seen within this window count as liveness; older ones only enrich.
+    pub fresh_window: Duration,
+}
+
 pub struct LiveCollector {
     pub iface_override: Option<String>,
     pub max_hosts: usize,
     pub tcp_probe: bool,
     /// mDNS entries seen within this window count as liveness; older ones only enrich.
     pub fresh_window: Duration,
+    /// UPnP descriptions, gateway DNS and NetBIOS, cached.
+    enricher: Enricher,
     use_ping_binary: AtomicBool,
     /// mDNS follows the selected interface; a failed start is never cached.
     mdns: Keyed<Arc<dyn MdnsSource>>,
 }
 
 impl LiveCollector {
-    pub fn new(
-        iface_override: Option<String>,
-        max_hosts: usize,
-        tcp_probe: bool,
-        fresh_window: Duration,
-    ) -> Self {
+    pub fn new(opts: LiveOptions) -> Self {
         Self {
-            iface_override,
-            max_hosts,
-            tcp_probe,
-            fresh_window,
+            iface_override: opts.iface_override,
+            max_hosts: opts.max_hosts,
+            tcp_probe: opts.tcp_probe,
+            fresh_window: opts.fresh_window,
+            enricher: Enricher::new(EnrichOptions {
+                upnp: opts.upnp,
+                dns: opts.dns,
+                netbios: opts.netbios,
+            }),
             use_ping_binary: AtomicBool::new(false),
             mdns: Keyed::new(),
         }
@@ -480,6 +552,50 @@ impl Collector for LiveCollector {
                     .collect();
                 tcp_alive = tcp_probe::probe(selected.net, &silent).await;
             }
+            // Ping replies give round-trip time and (where the OS shows it) a TTL-based OS hint.
+            let mut host_info: BTreeMap<Ipv4Addr, HostInfo> = BTreeMap::new();
+            for (ip, r) in &sweep.replies {
+                host_info.insert(
+                    *ip,
+                    HostInfo {
+                        rtt_ms: Some(r.rtt_ms),
+                        os_hint: r.ttl.and_then(os_hint_from_ttl).map(str::to_string),
+                        ..Default::default()
+                    },
+                );
+            }
+            // UPnP descriptions, gateway DNS and NetBIOS (each isolated, cached, bounded).
+            let hosts: Vec<Ipv4Addr> = arp
+                .iter()
+                .filter(|e| e.mac.is_some())
+                .map(|e| e.ip)
+                .chain(sweep.alive.iter().copied())
+                .collect();
+            let enriched = self
+                .enricher
+                .run(EnrichInput {
+                    now: now_ms(),
+                    net: selected.net,
+                    iface_ip: selected.ip,
+                    gateway: selected.gateway_ip,
+                    hosts: &hosts,
+                    alive: &sweep.alive,
+                    ssdp: &ssdp,
+                })
+                .await;
+            warnings.extend(enriched.warnings);
+            for (ip, e) in enriched.info {
+                let h = host_info.entry(ip).or_default();
+                h.friendly_name = e.friendly_name;
+                h.manufacturer = e.manufacturer;
+                h.model = e.model;
+                h.dns_name = e.dns_name;
+                h.netbios_name = e.netbios_name;
+                h.upnp_answered = e.upnp_answered;
+                h.dns_cleared = e.dns_cleared;
+                h.netbios_cleared = e.netbios_cleared;
+            }
+
             // Read mDNS last: by now it has been listening through the sweep and SSDP window.
             let mdns_src = self.mdns_for(&selected);
             let (mdns, mdns_available, mdns_warning) = collect_mdns(&mdns_src, self.fresh_window);
@@ -493,6 +609,7 @@ impl Collector for LiveCollector {
                 mdns,
                 ssdp,
                 local_macs,
+                host_info,
                 mdns_available,
                 ping_method: method.as_str().to_string(),
                 warnings,

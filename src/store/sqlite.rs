@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use crate::model::Device;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -16,6 +16,10 @@ pub enum StoreError {
     Db(#[from] rusqlite::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(
+        "this database was created by a newer rhizome (schema version {found}, this build supports up to {supported}); upgrade rhizome or use another --db"
+    )]
+    TooNew { found: i64, supported: i64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +33,14 @@ pub struct StoredDevice {
     pub randomized: bool,
     pub first_seen: i64,
     pub last_seen: i64,
+    pub custom_name: Option<String>,
+    pub notes: Option<String>,
+    pub friendly_name: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub dns_name: Option<String>,
+    pub netbios_name: Option<String>,
+    pub os_hint: Option<String>,
 }
 
 pub struct Store {
@@ -78,14 +90,27 @@ impl Store {
 
     /// Apply pending migrations (tracked in `PRAGMA user_version`). Safe to repeat.
     pub fn migrate(&self) -> Result<(), StoreError> {
+        use rusqlite::TransactionBehavior;
         let mut conn = self.conn();
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        // IMMEDIATE takes the write lock first, so the version is read and the
+        // steps applied atomically even if another process opens the file now.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(StoreError::TooNew {
+                found: version,
+                supported: SCHEMA_VERSION,
+            });
+        }
         if version < 1 {
-            let tx = conn.transaction()?;
             tx.execute_batch(include_str!("schema.sql"))?;
             tx.execute_batch("PRAGMA user_version = 1")?;
-            tx.commit()?;
         }
+        if version < 2 {
+            tx.execute_batch(include_str!("schema_v2.sql"))?;
+            tx.execute_batch("PRAGMA user_version = 2")?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -102,8 +127,9 @@ impl Store {
         let tx = conn.transaction()?;
         {
             let mut st = tx.prepare_cached(
-                "INSERT INTO devices (network_id, id, mac, last_ip, hostname, vendor, kind, randomized, first_seen, last_seen)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO devices (network_id, id, mac, last_ip, hostname, vendor, kind, randomized, first_seen, last_seen,
+                                      friendly_name, manufacturer, model, dns_name, netbios_name, os_hint)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                  ON CONFLICT(network_id, id) DO UPDATE SET
                     mac = excluded.mac,
                     last_ip = excluded.last_ip,
@@ -111,7 +137,16 @@ impl Store {
                     vendor = excluded.vendor,
                     kind = excluded.kind,
                     randomized = excluded.randomized,
-                    last_seen = MAX(devices.last_seen, excluded.last_seen)",
+                    -- Learned fields take the newest value, including NULL: the scanner keeps a
+                    -- value while its source is quiet and drops it only on an authoritative
+                    -- miss (see merge), so the database simply mirrors the live state.
+                    last_seen = MAX(devices.last_seen, excluded.last_seen),
+                    friendly_name = excluded.friendly_name,
+                    manufacturer = excluded.manufacturer,
+                    model = excluded.model,
+                    dns_name = excluded.dns_name,
+                    netbios_name = excluded.netbios_name,
+                    os_hint = excluded.os_hint",
             )?;
             for d in devices {
                 st.execute(rusqlite::params![
@@ -125,6 +160,12 @@ impl Store {
                     d.randomized_mac,
                     d.first_seen,
                     d.last_seen,
+                    d.friendly_name,
+                    d.manufacturer,
+                    d.model,
+                    d.dns_name,
+                    d.netbios_name,
+                    d.os_hint,
                 ])?;
             }
         }
@@ -135,7 +176,8 @@ impl Store {
     pub fn load(&self, network_id: &str) -> Result<Vec<StoredDevice>, StoreError> {
         let conn = self.conn();
         let mut st = conn.prepare_cached(
-            "SELECT id, mac, last_ip, hostname, vendor, kind, randomized, first_seen, last_seen
+            "SELECT id, mac, last_ip, hostname, vendor, kind, randomized, first_seen, last_seen,
+                    custom_name, notes, friendly_name, manufacturer, model, dns_name, netbios_name, os_hint
              FROM devices WHERE network_id = ?1 ORDER BY id",
         )?;
         let rows = st.query_map([network_id], |r| {
@@ -149,9 +191,29 @@ impl Store {
                 randomized: r.get(6)?,
                 first_seen: r.get(7)?,
                 last_seen: r.get(8)?,
+                custom_name: r.get(9)?,
+                notes: r.get(10)?,
+                friendly_name: r.get(11)?,
+                manufacturer: r.get(12)?,
+                model: r.get(13)?,
+                dns_name: r.get(14)?,
+                netbios_name: r.get(15)?,
+                os_hint: r.get(16)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Store the user's name and notes for one device (clearing with `None`).
+    /// Inserts the device row first if it is not stored yet; ordinary
+    /// `upsert_many` calls never touch these two columns.
+    pub fn set_user_meta(&self, network_id: &str, device: &Device) -> Result<(), StoreError> {
+        self.upsert_many(network_id, std::slice::from_ref(device))?;
+        self.conn().execute(
+            "UPDATE devices SET custom_name = ?3, notes = ?4 WHERE network_id = ?1 AND id = ?2",
+            rusqlite::params![network_id, device.id, device.custom_name, device.notes],
+        )?;
+        Ok(())
     }
 
     pub fn get_meta(&self, network_id: &str, key: &str) -> Result<Option<String>, StoreError> {
@@ -180,26 +242,25 @@ impl StoredDevice {
     /// Rebuild a (currently offline) device from history. Returns `None` for
     /// rows whose MAC or IP no longer parse.
     pub fn into_device(self) -> Option<Device> {
+        let mac: crate::model::MacAddr = self.mac.parse().ok()?;
+        let ip = self.last_ip.parse().ok()?;
         Some(Device {
             id: self.id,
-            mac: self.mac.parse().ok()?,
-            ip: self.last_ip.parse().ok()?,
             vendor: self.vendor,
             hostname: self.hostname.clone(),
             hostname_source: self.hostname.as_ref().map(|_| "history".to_string()),
             kind: crate::model::DeviceKind::from_db(&self.kind),
-            services: vec![],
-            ssdp_server: None,
-            ssdp_types: vec![],
-            ssdp_location: None,
-            is_gateway: false,
-            is_self: false,
             randomized_mac: self.randomized,
-            shared_mac: false,
-            online: false,
-            first_seen: self.first_seen,
             last_seen: self.last_seen,
-            is_new: false,
+            custom_name: self.custom_name,
+            notes: self.notes,
+            friendly_name: self.friendly_name,
+            manufacturer: self.manufacturer,
+            model: self.model,
+            dns_name: self.dns_name,
+            netbios_name: self.netbios_name,
+            os_hint: self.os_hint,
+            ..Device::new(mac, ip, self.first_seen)
         })
     }
 }

@@ -1192,6 +1192,7 @@ dependencies = [
  "ipnet",
  "mdns-sd",
  "netdev",
+ "quick-xml",
  "rusqlite",
  "rust-embed",
  "serde",

@@ -74,7 +74,7 @@ impl DeviceKind {
 ///
 /// `last_seen` is the last time positive liveness evidence was observed
 /// (the plan's `last_alive`; the two fields were folded into one).
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Device {
     pub id: String,
     pub mac: MacAddr,
@@ -97,6 +97,89 @@ pub struct Device {
     pub first_seen: i64,
     pub last_seen: i64,
     pub is_new: bool,
+    /// Set by the user, never by the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
+    /// Set by the user, never by the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// From the UPnP device description, else mDNS TXT records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friendly_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// PTR answer from the gateway's DNS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_name: Option<String>,
+    /// NetBIOS workstation name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub netbios_name: Option<String>,
+    /// Latest ping round-trip time in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<f64>,
+    /// Coarse OS family guessed from the ping reply TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_hint: Option<String>,
+    /// Which of the three identity fields above came only from mDNS TXT records.
+    /// mdns-sd does not expose the packet's source address, so those cannot be
+    /// tied to the host that sent them: they are shown, but never trusted for
+    /// classification and never stored.
+    #[serde(skip)]
+    pub txt_sourced: TxtSourced,
+}
+
+/// See `Device::txt_sourced`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct TxtSourced {
+    pub friendly_name: bool,
+    pub model: bool,
+    pub manufacturer: bool,
+}
+
+impl Device {
+    /// A device seen for the first time at `now`, with nothing known about it.
+    pub fn new(mac: MacAddr, ip: Ipv4Addr, now: i64) -> Self {
+        Self {
+            id: mac.to_string(),
+            mac,
+            ip,
+            vendor: None,
+            hostname: None,
+            hostname_source: None,
+            kind: DeviceKind::Unknown,
+            services: vec![],
+            ssdp_server: None,
+            ssdp_types: vec![],
+            ssdp_location: None,
+            is_gateway: false,
+            is_self: false,
+            randomized_mac: false,
+            shared_mac: false,
+            online: false,
+            first_seen: now,
+            last_seen: now,
+            is_new: false,
+            custom_name: None,
+            notes: None,
+            friendly_name: None,
+            manufacturer: None,
+            model: None,
+            dns_name: None,
+            netbios_name: None,
+            rtt_ms: None,
+            os_hint: None,
+            txt_sourced: TxtSourced::default(),
+        }
+    }
+}
+
+/// What the user typed for a device (kept apart from anything learned from the network).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct UserMeta {
+    pub custom_name: Option<String>,
+    pub notes: Option<String>,
 }
 
 pub type DeviceMap = BTreeMap<String, Device>;
@@ -117,7 +200,7 @@ pub struct ScanStatus {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum DeviceEvent {
     Upsert(Box<Device>),
     Removed(String),
@@ -134,6 +217,43 @@ pub struct MdnsHit {
     /// Observed within the current scan window (counts as liveness); cached
     /// older entries only enrich hostname and services.
     pub fresh: bool,
+    /// From TXT records (`fn`, `md`, `model`, `ty`, `am`, ...) or the instance name.
+    pub friendly_name: Option<String>,
+    pub model: Option<String>,
+    pub manufacturer: Option<String>,
+}
+
+impl Default for MdnsHit {
+    fn default() -> Self {
+        Self {
+            ip: std::net::Ipv4Addr::UNSPECIFIED,
+            hostname: None,
+            service_types: vec![],
+            fresh: false,
+            friendly_name: None,
+            model: None,
+            manufacturer: None,
+        }
+    }
+}
+
+/// Extra facts about one host, gathered by the optional enrichment sources.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct HostInfo {
+    pub friendly_name: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub dns_name: Option<String>,
+    pub netbios_name: Option<String>,
+    /// Round-trip time of this scan's ping reply, in milliseconds.
+    pub rtt_ms: Option<f64>,
+    pub os_hint: Option<String>,
+    /// A UPnP description was fetched this scan: its three fields replace the
+    /// stored ones exactly (a field it no longer has is dropped).
+    pub upnp_answered: bool,
+    /// A completed query for a host that answered ping found no such name: drop it.
+    pub dns_cleared: bool,
+    pub netbios_cleared: bool,
 }
 
 /// The interesting headers of one SSDP response.

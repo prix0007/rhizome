@@ -15,7 +15,7 @@ fn dev(ip: &str, mac: &str, first: i64, last: i64) -> rhizome::model::Device {
 fn migrate_is_idempotent_and_sets_user_version() {
     let s = Store::open_in_memory().unwrap();
     let v1 = s.user_version().unwrap();
-    assert_eq!(v1, 1);
+    assert_eq!(v1, 2);
     s.migrate().unwrap();
     s.migrate().unwrap();
     assert_eq!(s.user_version().unwrap(), v1);
@@ -164,7 +164,7 @@ fn data_survives_reopen() {
         s.get_meta("n", "baseline_at").unwrap().as_deref(),
         Some("10")
     );
-    assert_eq!(s.user_version().unwrap(), 1);
+    assert_eq!(s.user_version().unwrap(), 2);
 }
 
 #[test]

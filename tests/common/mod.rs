@@ -17,29 +17,14 @@ pub const HOST: &str = "127.0.0.1:7878";
 pub fn device(ip: &str, mac: &str, gw: bool) -> Device {
     let m: MacAddr = mac.parse().unwrap();
     Device {
-        id: m.to_string(),
-        mac: m,
-        ip: ip.parse().unwrap(),
-        vendor: None,
-        hostname: None,
-        hostname_source: None,
         kind: if gw {
             DeviceKind::Gateway
         } else {
             DeviceKind::Unknown
         },
-        services: vec![],
-        ssdp_server: None,
-        ssdp_types: vec![],
-        ssdp_location: None,
         is_gateway: gw,
-        is_self: false,
-        randomized_mac: false,
-        shared_mac: false,
         online: true,
-        first_seen: 1,
-        last_seen: 1,
-        is_new: false,
+        ..Device::new(m, ip.parse().unwrap(), 1)
     }
 }
 

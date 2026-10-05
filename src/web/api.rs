@@ -1,15 +1,18 @@
 use std::convert::Infallible;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use futures_util::stream;
 use serde_json::json;
 use tokio_stream::wrappers::BroadcastStream;
 
 use super::AppState;
-use crate::model::{Device, DeviceEvent, ScanStatus};
+use super::meta::parse_meta_update;
+use crate::model::{Device, DeviceEvent, ScanStatus, UserMeta};
 use crate::state::hub::Hub;
 
 pub async fn devices(State(st): State<AppState>) -> Json<Vec<Device>> {
@@ -59,4 +62,51 @@ pub async fn events(State(st): State<AppState>) -> impl axum::response::IntoResp
         .take_until(st.shutdown.clone().cancelled_owned())
         .map(Ok::<_, Infallible>);
     Sse::new(s).keep_alive(KeepAlive::default())
+}
+
+/// `PUT /api/devices/{id}/meta`: the user's name and notes for one device.
+/// (Origin and `X-Rhizome` are enforced by the route's middleware.)
+pub async fn put_meta(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    // One edit at a time from the read to the commit (the DB write is awaited inside).
+    let _edit = st.meta_lock.lock().await;
+    let Some(device) = st.hub.device_map().get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND, "unknown device").into_response();
+    };
+    let update = match parse_meta_update(&body) {
+        Ok(u) => u,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let new = update.apply(&UserMeta {
+        custom_name: device.custom_name.clone(),
+        notes: device.notes.clone(),
+    });
+
+    if let Some(store) = st.store.clone() {
+        let Some(nid) = st.hub.network_id() else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "network not identified yet; try again after the next scan",
+            )
+                .into_response();
+        };
+        let mut to_save = device.clone();
+        to_save.custom_name = new.custom_name.clone();
+        to_save.notes = new.notes.clone();
+        match tokio::task::spawn_blocking(move || store.set_user_meta(&nid, &to_save)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("could not save device metadata: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "could not save").into_response();
+            }
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "could not save").into_response(),
+        }
+    }
+    match st.hub.commit_user_meta(&id, new) {
+        Some(d) => Json(d).into_response(),
+        None => (StatusCode::NOT_FOUND, "unknown device").into_response(), // removed meanwhile
+    }
 }

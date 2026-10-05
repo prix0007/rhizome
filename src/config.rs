@@ -29,6 +29,15 @@ pub struct Config {
     /// Do not TCP-probe ARP-known hosts that ignore ping.
     #[arg(long)]
     pub no_tcp_probe: bool,
+    /// Do not send NetBIOS node-status queries (UDP 137) to hosts on the subnet.
+    #[arg(long)]
+    pub no_netbios: bool,
+    /// Do not send reverse-DNS (PTR) queries to the gateway.
+    #[arg(long)]
+    pub no_dns: bool,
+    /// Do not fetch UPnP device descriptions from hosts on the subnet.
+    #[arg(long)]
+    pub no_upnp: bool,
     /// Maximum number of hosts to ping per scan.
     #[arg(long, default_value_t = 1024)]
     pub max_hosts: usize,
@@ -88,8 +97,29 @@ mod tests {
         assert_eq!(c.interval, 30);
         assert_eq!(c.max_hosts, 1024);
         assert!(!c.no_tcp_probe);
+        assert!(!c.no_netbios && !c.no_dns && !c.no_upnp);
         assert!(c.validate().is_ok());
         assert_eq!(c.offline_after_ms(), 90_000);
+    }
+
+    #[test]
+    fn no_netbios_flag_is_opt_out_like_no_tcp_probe() {
+        assert!(parse(&["--no-netbios"]).no_netbios);
+        assert!(
+            parse(&["--no-netbios", "--no-tcp-probe"])
+                .validate()
+                .is_ok()
+        );
+        assert!(!parse(&[]).no_netbios);
+    }
+
+    #[test]
+    fn each_enrichment_source_has_its_own_opt_out() {
+        let c = parse(&["--no-dns", "--no-upnp", "--no-netbios"]);
+        assert!(c.no_dns && c.no_upnp && c.no_netbios);
+        assert!(parse(&["--no-dns"]).no_dns && !parse(&["--no-dns"]).no_upnp);
+        assert!(parse(&["--no-upnp"]).no_upnp && !parse(&["--no-upnp"]).no_dns);
+        assert!(c.validate().is_ok());
     }
 
     #[test]

@@ -32,6 +32,35 @@ pub fn sanitize(s: &str) -> String {
     cleaned.trim().chars().take(MAX_LEN).collect()
 }
 
+/// Like `sanitize`, for free text that may span lines: each line is cleaned
+/// and trimmed, `\r\n`/`\r` become `\n`, runs of blank lines collapse to one,
+/// and leading/trailing blank lines are dropped. Capped at `max_chars`.
+pub fn sanitize_multiline(s: &str, max_chars: usize) -> String {
+    let normalised = s.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<String> = Vec::new();
+    for line in normalised.split('\n') {
+        let clean = sanitize_line(line);
+        // collapse runs of blank lines and drop leading ones
+        if clean.is_empty() && lines.last().is_none_or(|l| l.is_empty()) {
+            continue;
+        }
+        lines.push(clean);
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n").chars().take(max_chars).collect()
+}
+
+/// `sanitize` without the length cap.
+fn sanitize_line(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .filter(|c| !c.is_control() && !is_invisible_format(*c))
+        .collect();
+    cleaned.trim().to_string()
+}
+
 /// Lossy UTF-8 decode, then `sanitize`.
 pub fn sanitize_bytes(b: &[u8]) -> String {
     sanitize(&String::from_utf8_lossy(b))
@@ -92,6 +121,26 @@ mod tests {
             sanitize("caf\u{e9} \u{1f4fa} \u{4e1c}\u{4eac}"),
             "caf\u{e9} \u{1f4fa} \u{4e1c}\u{4eac}"
         );
+    }
+
+    #[test]
+    fn multiline_keeps_line_breaks_but_cleans_each_line() {
+        assert_eq!(
+            sanitize_multiline("a\r\nb\rc\n\n\n\nd", 500),
+            "a\nb\nc\n\nd"
+        );
+        assert_eq!(
+            sanitize_multiline("\n\n  hi \x1b[0m \u{202e}there\u{0}\n\n", 500),
+            "hi [0m there"
+        );
+        assert_eq!(sanitize_multiline("", 500), "");
+        assert_eq!(
+            sanitize_multiline("é".repeat(600).as_str(), 500)
+                .chars()
+                .count(),
+            500
+        );
+        assert_eq!(sanitize_multiline("a\tb", 500), "ab");
     }
 
     #[test]

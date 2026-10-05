@@ -6,7 +6,9 @@ use std::net::Ipv4Addr;
 use crate::discovery::arp_parse::ArpEntry;
 use crate::enrich::classify::{ClassifyInput, classify};
 use crate::enrich::oui::OuiDb;
-use crate::model::{Device, DeviceEvent, DeviceKind, DeviceMap, MacAddr, MdnsHit, SsdpObservation};
+use crate::model::{
+    Device, DeviceEvent, DeviceMap, HostInfo, MacAddr, MdnsHit, SsdpObservation, TxtSourced,
+};
 use crate::net::iface_select::Selected;
 use crate::net::subnet::is_scan_target;
 
@@ -27,6 +29,8 @@ pub struct ScanInputs {
     pub ssdp: Vec<SsdpObservation>,
     /// MACs of every interface of this machine (a Mac can be on one subnet through several).
     pub local_macs: BTreeSet<MacAddr>,
+    /// Extra facts per IP (UPnP description, gateway DNS, NetBIOS, ping RTT/TTL).
+    pub host_info: BTreeMap<Ipv4Addr, HostInfo>,
     pub selected: Selected,
     pub scan_started_at: i64,
 }
@@ -40,6 +44,7 @@ impl ScanInputs {
             mdns: vec![],
             ssdp: vec![],
             local_macs: BTreeSet::new(),
+            host_info: BTreeMap::new(),
             selected,
             scan_started_at,
         }
@@ -195,6 +200,14 @@ pub fn merge(
         let mut servers: BTreeSet<&str> = BTreeSet::new();
         let mut types: BTreeSet<&str> = BTreeSet::new();
         let mut locations: BTreeSet<&str> = BTreeSet::new();
+        let mut txt_names: BTreeSet<&str> = BTreeSet::new();
+        let mut txt_models: BTreeSet<&str> = BTreeSet::new();
+        let mut txt_makers: BTreeSet<&str> = BTreeSet::new();
+        for h in inputs.mdns.iter().filter(|h| ips.contains(&h.ip)) {
+            txt_names.extend(h.friendly_name.as_deref());
+            txt_models.extend(h.model.as_deref());
+            txt_makers.extend(h.manufacturer.as_deref());
+        }
         for ip in &ips {
             if let Some((n, s)) = mdns_by_ip.get(ip) {
                 names.extend(n);
@@ -226,6 +239,101 @@ pub fn merge(
         if let Some(l) = locations.iter().next() {
             d.ssdp_location = Some((*l).to_string());
         }
+        // Identity. UPnP (source-verified) wins and replaces exactly; mDNS TXT is
+        // unverified and may only fill what no verified value holds.
+        let upnp = ips
+            .iter()
+            .filter_map(|ip| inputs.host_info.get(ip))
+            .find(|h| h.upnp_answered);
+        if let Some(h) = upnp {
+            d.friendly_name = h.friendly_name.clone();
+            d.manufacturer = h.manufacturer.clone();
+            d.model = h.model.clone();
+            d.txt_sourced = TxtSourced::default();
+        }
+        // Per-host extras from the other sources: first IP with a value wins.
+        for ip in &ips {
+            let Some(h) = inputs.host_info.get(ip) else {
+                continue;
+            };
+            if upnp.is_none() {
+                // not a full description: any verified value that is present still applies
+                for (slot, new, flag) in [
+                    (
+                        &mut d.friendly_name,
+                        &h.friendly_name,
+                        &mut d.txt_sourced.friendly_name,
+                    ),
+                    (
+                        &mut d.manufacturer,
+                        &h.manufacturer,
+                        &mut d.txt_sourced.manufacturer,
+                    ),
+                    (&mut d.model, &h.model, &mut d.txt_sourced.model),
+                ] {
+                    if new.is_some() {
+                        *slot = new.clone();
+                        *flag = false;
+                    }
+                }
+            }
+            fill(&mut d.dns_name, &h.dns_name);
+            fill(&mut d.netbios_name, &h.netbios_name);
+            fill(&mut d.os_hint, &h.os_hint);
+        }
+        if ips
+            .iter()
+            .filter_map(|ip| inputs.host_info.get(ip))
+            .any(|h| h.dns_cleared)
+            && !ips
+                .iter()
+                .filter_map(|ip| inputs.host_info.get(ip))
+                .any(|h| h.dns_name.is_some())
+        {
+            d.dns_name = None;
+        }
+        if ips
+            .iter()
+            .filter_map(|ip| inputs.host_info.get(ip))
+            .any(|h| h.netbios_cleared)
+            && !ips
+                .iter()
+                .filter_map(|ip| inputs.host_info.get(ip))
+                .any(|h| h.netbios_name.is_some())
+        {
+            d.netbios_name = None;
+        }
+        // mDNS TXT: fills an empty slot or replaces an earlier TXT value, never a verified one.
+        for (slot, new, flag) in [
+            (
+                &mut d.friendly_name,
+                txt_names.iter().next(),
+                &mut d.txt_sourced.friendly_name,
+            ),
+            (
+                &mut d.manufacturer,
+                txt_makers.iter().next(),
+                &mut d.txt_sourced.manufacturer,
+            ),
+            (
+                &mut d.model,
+                txt_models.iter().next(),
+                &mut d.txt_sourced.model,
+            ),
+        ] {
+            if let Some(v) = new
+                && (slot.is_none() || *flag)
+            {
+                *slot = Some((*v).to_string());
+                *flag = true;
+            }
+        }
+        d.rtt_ms = inputs.host_info.get(&d.ip).and_then(|h| h.rtt_ms);
+    }
+    // A device that was not seen this scan has no latest round-trip time.
+    for (id, d) in next.iter_mut().filter(|(id, _)| !seen.contains(*id)) {
+        let _ = id;
+        d.rtt_ms = None;
     }
 
     // A local interface that is up is alive by definition.
@@ -268,6 +376,18 @@ pub fn merge(
             services: &d.services,
             ssdp_server: d.ssdp_server.as_deref(),
             ssdp_types: &d.ssdp_types,
+            // mDNS-TXT-only identity is unverified and never classifies a device.
+            friendly_name: d
+                .friendly_name
+                .as_deref()
+                .filter(|_| !d.txt_sourced.friendly_name),
+            manufacturer: d
+                .manufacturer
+                .as_deref()
+                .filter(|_| !d.txt_sourced.manufacturer),
+            model: d.model.as_deref().filter(|_| !d.txt_sourced.model),
+            dns_name: d.dns_name.as_deref(),
+            netbios_name: d.netbios_name.as_deref(),
             is_gw: d.is_gateway,
             is_self: d.is_self,
         });
@@ -277,28 +397,15 @@ pub fn merge(
     (next, events)
 }
 
-fn blank_device(mac: MacAddr, ip: Ipv4Addr, now: i64) -> Device {
-    Device {
-        id: mac.to_string(),
-        mac,
-        ip,
-        vendor: None,
-        hostname: None,
-        hostname_source: None,
-        kind: DeviceKind::Unknown,
-        services: vec![],
-        ssdp_server: None,
-        ssdp_types: vec![],
-        ssdp_location: None,
-        is_gateway: false,
-        is_self: false,
-        randomized_mac: false,
-        shared_mac: false,
-        online: false,
-        first_seen: now,
-        last_seen: now,
-        is_new: false,
+/// Overwrite with a newly reported value (the source is authoritative).
+fn fill(slot: &mut Option<String>, new: &Option<String>) {
+    if new.is_some() {
+        *slot = new.clone();
     }
+}
+
+fn blank_device(mac: MacAddr, ip: Ipv4Addr, now: i64) -> Device {
+    Device::new(mac, ip, now)
 }
 
 /// Upserts for every device that changed, ignoring `last_seen` alone (it moves
@@ -310,6 +417,12 @@ pub fn diff(prev: &DeviceMap, next: &DeviceMap) -> Vec<DeviceEvent> {
             Some(p) => {
                 let mut p = p.clone();
                 p.last_seen = d.last_seen;
+                // Latency jitter is not news; a real change or a reply appearing/vanishing is.
+                if let (Some(a), Some(b)) = (p.rtt_ms, d.rtt_ms)
+                    && (a - b).abs() <= (a.abs() * 0.5).max(1.0)
+                {
+                    p.rtt_ms = d.rtt_ms;
+                }
                 &p != *d
             }
         })
@@ -729,6 +842,7 @@ mod tests {
             hostname: host.map(String::from),
             service_types: services.iter().map(|s| s.to_string()).collect(),
             fresh: true,
+            ..Default::default()
         }
     }
 
@@ -951,6 +1065,389 @@ mod tests {
         assert_eq!(
             network_id(&no_gw, &[]).as_deref(),
             Some("net:192.168.0.0/24")
+        );
+    }
+
+    // ---- richer device information ----
+
+    fn info(f: impl FnOnce(&mut HostInfo)) -> HostInfo {
+        let mut h = HostInfo::default();
+        f(&mut h);
+        h
+    }
+
+    fn with_info(ip: &str, h: HostInfo, now: i64) -> ScanInputs {
+        let mut i = inputs(base_arp(), now);
+        i.host_info.insert(ip.parse().unwrap(), h);
+        i
+    }
+
+    const PHONE: &str = "02:00:00:00:00:62";
+
+    #[test]
+    fn host_info_is_joined_by_ip_and_fills_the_new_fields() {
+        let h = info(|h| {
+            h.friendly_name = Some("Living Room TV".into());
+            h.manufacturer = Some("Sony".into());
+            h.model = Some("BRAVIA".into());
+            h.dns_name = Some("tv.lan".into());
+            h.netbios_name = Some("TV".into());
+            h.rtt_ms = Some(2.5);
+            h.os_hint = Some("Linux/Unix/macOS-like".into());
+        });
+        let (m, _) = merge(
+            &DeviceMap::new(),
+            &with_info("192.168.0.82", h, T0),
+            &MergeCtx::new(T0),
+        );
+        let d = &m[PHONE];
+        assert_eq!(d.friendly_name.as_deref(), Some("Living Room TV"));
+        assert_eq!(d.manufacturer.as_deref(), Some("Sony"));
+        assert_eq!(d.model.as_deref(), Some("BRAVIA"));
+        assert_eq!(d.dns_name.as_deref(), Some("tv.lan"));
+        assert_eq!(d.netbios_name.as_deref(), Some("TV"));
+        assert_eq!(d.rtt_ms, Some(2.5));
+        assert_eq!(d.os_hint.as_deref(), Some("Linux/Unix/macOS-like"));
+        assert_eq!(
+            d.kind,
+            DeviceKind::Tv,
+            "BRAVIA is classified through the model"
+        );
+        assert!(m["68:7f:f0:00:00:01"].friendly_name.is_none());
+    }
+
+    #[test]
+    fn learned_fields_stick_but_rtt_reflects_only_the_latest_scan() {
+        let h = info(|h| {
+            h.friendly_name = Some("Den".into());
+            h.rtt_ms = Some(1.0);
+            h.os_hint = Some("Windows-like".into());
+        });
+        let (m1, _) = merge(
+            &DeviceMap::new(),
+            &with_info("192.168.0.82", h, T0),
+            &MergeCtx::new(T0),
+        );
+        let (m2, _) = merge(
+            &m1,
+            &inputs(base_arp(), T0 + 30_000),
+            &MergeCtx::new(T0 + 30_000),
+        );
+        let d = &m2[PHONE];
+        assert_eq!(
+            d.friendly_name.as_deref(),
+            Some("Den"),
+            "a cached source going quiet does not erase it"
+        );
+        assert_eq!(d.os_hint.as_deref(), Some("Windows-like"));
+        assert_eq!(d.rtt_ms, None, "no reply this scan, no round-trip time");
+    }
+
+    #[test]
+    fn upnp_beats_mdns_txt_for_name_and_model_but_txt_fills_gaps() {
+        let mut i = with_info(
+            "192.168.0.82",
+            info(|h| h.friendly_name = Some("From UPnP".into())),
+            T0,
+        );
+        i.mdns = vec![MdnsHit {
+            ip: "192.168.0.82".parse().unwrap(),
+            fresh: true,
+            friendly_name: Some("From mDNS".into()),
+            model: Some("Cast model".into()),
+            manufacturer: Some("Google".into()),
+            ..Default::default()
+        }];
+        let (m, _) = merge(&DeviceMap::new(), &i, &MergeCtx::new(T0));
+        let d = &m[PHONE];
+        assert_eq!(d.friendly_name.as_deref(), Some("From UPnP"));
+        assert_eq!(d.model.as_deref(), Some("Cast model"));
+        assert_eq!(d.manufacturer.as_deref(), Some("Google"));
+    }
+
+    #[test]
+    fn host_info_joins_through_any_ip_of_a_multi_ip_mac_and_ignores_unknown_ips() {
+        let mut i = inputs(
+            vec![
+                arp("192.168.0.5", "aa:bb:cc:dd:ee:05"),
+                arp("192.168.0.50", "aa:bb:cc:dd:ee:05"),
+            ],
+            T0,
+        );
+        i.host_info.insert(
+            "192.168.0.50".parse().unwrap(),
+            info(|h| h.dns_name = Some("moved.lan".into())),
+        );
+        i.host_info.insert(
+            "192.168.0.222".parse().unwrap(),
+            info(|h| h.dns_name = Some("ghost.lan".into())),
+        );
+        let (m, _) = merge(&DeviceMap::new(), &i, &MergeCtx::new(T0));
+        assert_eq!(
+            m["aa:bb:cc:dd:ee:05"].dns_name.as_deref(),
+            Some("moved.lan")
+        );
+        assert_eq!(m.len(), 2, "host info never creates a device");
+        assert!(
+            m.values()
+                .all(|d| d.dns_name.as_deref() != Some("ghost.lan"))
+        );
+    }
+
+    #[test]
+    fn merge_never_overwrites_the_users_name_or_notes() {
+        let mut prev = DeviceMap::new();
+        let (m1, _) = merge(&prev, &inputs(base_arp(), T0), &MergeCtx::new(T0));
+        prev = m1;
+        let d = prev.get_mut(PHONE).unwrap();
+        d.custom_name = Some("Dad's phone".into());
+        d.notes = Some("do not remove".into());
+        // a scan full of data that would otherwise rename it
+        let mut i = with_info(
+            "192.168.0.82",
+            info(|h| {
+                h.friendly_name = Some("Pixel 8".into());
+                h.dns_name = Some("pixel.lan".into());
+                h.netbios_name = Some("PIXEL".into());
+            }),
+            T0 + 30_000,
+        );
+        i.mdns = vec![MdnsHit {
+            ip: "192.168.0.82".parse().unwrap(),
+            hostname: Some("pixel".into()),
+            fresh: true,
+            friendly_name: Some("Other".into()),
+            ..Default::default()
+        }];
+        let (m2, _) = merge(&prev, &i, &MergeCtx::new(T0 + 30_000));
+        assert_eq!(m2[PHONE].custom_name.as_deref(), Some("Dad's phone"));
+        assert_eq!(m2[PHONE].notes.as_deref(), Some("do not remove"));
+        assert_eq!(
+            m2[PHONE].friendly_name.as_deref(),
+            Some("Pixel 8"),
+            "the learned name is separate"
+        );
+    }
+
+    #[test]
+    fn small_rtt_jitter_is_not_an_event_but_real_changes_and_appearance_are() {
+        let rtt = |ms: f64| with_info("192.168.0.82", info(|h| h.rtt_ms = Some(ms)), T0);
+        let (m1, _) = merge(&DeviceMap::new(), &rtt(2.0), &MergeCtx::new(T0));
+        let (_, ev) = merge(&m1, &rtt(2.4), &MergeCtx::new(T0));
+        assert!(
+            ev.is_empty(),
+            "jitter must not wake every SSE client: {ev:?}"
+        );
+        let (_, ev) = merge(&m1, &rtt(40.0), &MergeCtx::new(T0));
+        assert_eq!(upserts(&ev).len(), 1, "a real latency change is announced");
+        let (_, ev) = merge(&m1, &inputs(base_arp(), T0), &MergeCtx::new(T0));
+        assert_eq!(
+            upserts(&ev).len(),
+            1,
+            "going from a reply to none is announced"
+        );
+    }
+
+    // ---- trust and drop rules for learned identity ----
+    //
+    // Rules (also in the README):
+    //  * UPnP fields (friendly_name, manufacturer, model) are source-verified. Each
+    //    successfully fetched description replaces them exactly; a field it no
+    //    longer has is dropped. A failed or not-due fetch keeps the old values.
+    //  * dns_name / netbios_name are replaced by each newer answer and dropped when
+    //    a completed query for a host that answered ping finds no name. A silent
+    //    host keeps its name.
+    //  * mDNS TXT identity is unverified (no source address from mdns-sd): shown,
+    //    replaced by newer TXT, kept while mDNS is quiet, never classified, never
+    //    stored, and never allowed to override a verified value.
+    //  * os_hint is replaced by each reply and kept when there is none.
+
+    fn txt_hit(model: Option<&str>, name: Option<&str>) -> MdnsHit {
+        MdnsHit {
+            ip: "192.168.0.82".parse().unwrap(),
+            fresh: true,
+            model: model.map(String::from),
+            friendly_name: name.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mdns_txt_identity_is_shown_but_flagged_and_never_drives_classification() {
+        let mut i = inputs(base_arp(), T0);
+        i.mdns = vec![txt_hit(Some("Chromecast Ultra"), Some("Forged TV"))];
+        let (m, _) = merge(&DeviceMap::new(), &i, &MergeCtx::new(T0));
+        let d = &m[PHONE];
+        assert_eq!(d.model.as_deref(), Some("Chromecast Ultra"));
+        assert!(d.txt_sourced.model && d.txt_sourced.friendly_name);
+        assert_eq!(
+            d.kind,
+            DeviceKind::Unknown,
+            "an unverified model must not classify the device"
+        );
+    }
+
+    #[test]
+    fn a_newer_txt_value_replaces_an_older_one_and_it_sticks_while_mdns_is_quiet() {
+        let mut i = inputs(base_arp(), T0);
+        i.mdns = vec![txt_hit(Some("Old"), None)];
+        let (m1, _) = merge(&DeviceMap::new(), &i, &MergeCtx::new(T0));
+        let mut i = inputs(base_arp(), T0 + 30_000);
+        i.mdns = vec![txt_hit(Some("New"), None)];
+        let (m2, _) = merge(&m1, &i, &MergeCtx::new(T0 + 30_000));
+        assert_eq!(m2[PHONE].model.as_deref(), Some("New"));
+        let (m3, _) = merge(
+            &m2,
+            &inputs(base_arp(), T0 + 60_000),
+            &MergeCtx::new(T0 + 60_000),
+        );
+        assert_eq!(m3[PHONE].model.as_deref(), Some("New"));
+        assert!(m3[PHONE].txt_sourced.model);
+    }
+
+    #[test]
+    fn a_verified_upnp_value_wins_over_txt_and_is_not_displaced_by_it_later() {
+        let mut i = with_info(
+            "192.168.0.82",
+            info(|h| {
+                h.model = Some("BRAVIA".into());
+                h.upnp_answered = true;
+            }),
+            T0,
+        );
+        i.mdns = vec![txt_hit(Some("Forged"), None)];
+        let (m1, _) = merge(&DeviceMap::new(), &i, &MergeCtx::new(T0));
+        assert_eq!(m1[PHONE].model.as_deref(), Some("BRAVIA"));
+        assert!(!m1[PHONE].txt_sourced.model);
+        assert_eq!(m1[PHONE].kind, DeviceKind::Tv);
+        // the UPnP cache momentarily has nothing; a forged TXT must not take the verified slot
+        let mut i = inputs(base_arp(), T0 + 30_000);
+        i.mdns = vec![txt_hit(Some("Forged"), None)];
+        let (m2, _) = merge(&m1, &i, &MergeCtx::new(T0 + 30_000));
+        assert_eq!(m2[PHONE].model.as_deref(), Some("BRAVIA"));
+        assert!(!m2[PHONE].txt_sourced.model);
+    }
+
+    #[test]
+    fn a_new_upnp_description_replaces_exactly_and_drops_fields_it_no_longer_has() {
+        let full = info(|h| {
+            h.friendly_name = Some("Den".into());
+            h.manufacturer = Some("Acme".into());
+            h.model = Some("X1".into());
+            h.upnp_answered = true;
+        });
+        let (m1, _) = merge(
+            &DeviceMap::new(),
+            &with_info("192.168.0.82", full, T0),
+            &MergeCtx::new(T0),
+        );
+        let slim = info(|h| {
+            h.friendly_name = Some("Den 2".into());
+            h.upnp_answered = true;
+        });
+        let (m2, _) = merge(
+            &m1,
+            &with_info("192.168.0.82", slim, T0 + 1),
+            &MergeCtx::new(T0 + 1),
+        );
+        let d = &m2[PHONE];
+        assert_eq!(d.friendly_name.as_deref(), Some("Den 2"));
+        assert_eq!((d.manufacturer.clone(), d.model.clone()), (None, None));
+    }
+
+    #[test]
+    fn dns_and_netbios_names_are_replaced_dropped_on_an_authoritative_miss_and_kept_when_silent() {
+        let named = info(|h| {
+            h.dns_name = Some("a.lan".into());
+            h.netbios_name = Some("PC-A".into());
+        });
+        let (m1, _) = merge(
+            &DeviceMap::new(),
+            &with_info("192.168.0.82", named, T0),
+            &MergeCtx::new(T0),
+        );
+        let renamed = info(|h| h.dns_name = Some("b.lan".into()));
+        let (m2, _) = merge(
+            &m1,
+            &with_info("192.168.0.82", renamed, T0 + 1),
+            &MergeCtx::new(T0 + 1),
+        );
+        assert_eq!(
+            m2[PHONE].dns_name.as_deref(),
+            Some("b.lan"),
+            "newer answer replaces"
+        );
+        assert_eq!(
+            m2[PHONE].netbios_name.as_deref(),
+            Some("PC-A"),
+            "silence keeps it"
+        );
+        let (m3, _) = merge(&m2, &inputs(base_arp(), T0 + 2), &MergeCtx::new(T0 + 2));
+        assert_eq!(m3[PHONE].dns_name.as_deref(), Some("b.lan"));
+        let miss = info(|h| {
+            h.dns_cleared = true;
+            h.netbios_cleared = true;
+        });
+        let (m4, _) = merge(
+            &m3,
+            &with_info("192.168.0.82", miss, T0 + 3),
+            &MergeCtx::new(T0 + 3),
+        );
+        assert_eq!(
+            (m4[PHONE].dns_name.clone(), m4[PHONE].netbios_name.clone()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn os_hint_is_replaced_by_each_reply_and_kept_without_one() {
+        let (m1, _) = merge(
+            &DeviceMap::new(),
+            &with_info(
+                "192.168.0.82",
+                info(|h| h.os_hint = Some("Windows-like".into())),
+                T0,
+            ),
+            &MergeCtx::new(T0),
+        );
+        let (m2, _) = merge(
+            &m1,
+            &with_info(
+                "192.168.0.82",
+                info(|h| h.os_hint = Some("Linux/Unix/macOS-like".into())),
+                T0 + 1,
+            ),
+            &MergeCtx::new(T0 + 1),
+        );
+        assert_eq!(m2[PHONE].os_hint.as_deref(), Some("Linux/Unix/macOS-like"));
+        let (m3, _) = merge(&m2, &inputs(base_arp(), T0 + 2), &MergeCtx::new(T0 + 2));
+        assert_eq!(m3[PHONE].os_hint.as_deref(), Some("Linux/Unix/macOS-like"));
+    }
+
+    #[test]
+    fn none_of_this_ever_touches_the_users_name_or_notes() {
+        let (mut m, _) = merge(
+            &DeviceMap::new(),
+            &inputs(base_arp(), T0),
+            &MergeCtx::new(T0),
+        );
+        let d = m.get_mut(PHONE).unwrap();
+        d.custom_name = Some("Mine".into());
+        d.notes = Some("n".into());
+        let mut i = with_info(
+            "192.168.0.82",
+            info(|h| {
+                h.friendly_name = Some("X".into());
+                h.upnp_answered = true;
+                h.dns_cleared = true;
+            }),
+            T0 + 1,
+        );
+        i.mdns = vec![txt_hit(Some("Forged"), Some("Forged"))];
+        let (m2, _) = merge(&m, &i, &MergeCtx::new(T0 + 1));
+        assert_eq!(
+            (m2[PHONE].custom_name.as_deref(), m2[PHONE].notes.as_deref()),
+            (Some("Mine"), Some("n"))
         );
     }
 

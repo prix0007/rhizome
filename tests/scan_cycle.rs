@@ -344,6 +344,7 @@ async fn mdns_hits_flow_into_devices_and_availability_into_status() {
         hostname: Some("Anuragis-iPhone".into()),
         service_types: vec!["_apple-mobdev2".into()],
         fresh: true,
+        ..Default::default()
     }];
     c.mdns_available = true;
     let mut s = scanner(vec![Ok(c)], hub.clone());
@@ -665,4 +666,61 @@ async fn under_the_cap_there_is_no_limit_warning() {
     );
     s.run_cycle(T0).await;
     assert!(hub.snapshot().status.unwrap().warnings.is_empty());
+}
+
+#[tokio::test]
+async fn only_source_verified_identity_is_persisted_never_mdns_txt() {
+    use rhizome::model::{HostInfo, MdnsHit};
+    let store = Arc::new(Store::open_in_memory().unwrap());
+    let hub = Arc::new(Hub::new(64));
+    let mut c = ping_all(collected(vec![
+        e("192.168.0.1", "68:7f:f0:00:00:01"),
+        e("192.168.0.82", "2:0:0:0:0:62"),
+    ]));
+    c.mdns = vec![MdnsHit {
+        ip: "192.168.0.82".parse().unwrap(),
+        fresh: true,
+        model: Some("Forged Chromecast".into()),
+        friendly_name: Some("Forged".into()),
+        manufacturer: Some("Forger Inc".into()),
+        ..Default::default()
+    }];
+    c.host_info.insert(
+        "192.168.0.1".parse().unwrap(),
+        HostInfo {
+            model: Some("Archer".into()),
+            upnp_answered: true,
+            ..Default::default()
+        },
+    );
+    let mut s = with_store(vec![Ok(c)], hub.clone(), store.clone());
+    s.run_cycle(T0).await;
+    let shown = hub
+        .snapshot()
+        .devices
+        .into_iter()
+        .find(|d| d.ip.to_string() == "192.168.0.82")
+        .unwrap();
+    assert_eq!(
+        shown.model.as_deref(),
+        Some("Forged Chromecast"),
+        "displayed, flagged unverified"
+    );
+    let rows = store.load("68:7f:f0:00:00:01").unwrap();
+    let phone = rows.iter().find(|r| r.last_ip == "192.168.0.82").unwrap();
+    assert_eq!(
+        (
+            phone.model.as_deref(),
+            phone.friendly_name.as_deref(),
+            phone.manufacturer.as_deref()
+        ),
+        (None, None, None),
+        "TXT identity must not reach the database"
+    );
+    let gw = rows.iter().find(|r| r.last_ip == "192.168.0.1").unwrap();
+    assert_eq!(
+        gw.model.as_deref(),
+        Some("Archer"),
+        "UPnP-verified identity is stored"
+    );
 }

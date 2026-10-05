@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use ipnet::Ipv4Net;
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent};
 
-use super::mdns_map::{RawResolution, map_resolution, retain_in_subnet, valid_service_type};
+use super::mdns_map::{
+    RawResolution, instance_from_fullname, map_resolution, retain_in_subnet, valid_service_type,
+};
 use crate::model::MdnsHit;
 use crate::net::subnet::is_scan_target;
 
@@ -44,9 +46,18 @@ pub const MAX_CACHE_ENTRIES: usize = 1024;
 
 type Key = (Ipv4Addr, Option<String>);
 
+/// What we remember about one (host, service) observation.
+struct Entry {
+    hostname: Option<String>,
+    friendly_name: Option<String>,
+    model: Option<String>,
+    manufacturer: Option<String>,
+    seen: Instant,
+}
+
 /// Bounded cache of mDNS observations with a TTL.
 pub struct HitCache {
-    map: HashMap<Key, (Option<String>, Instant)>,
+    map: HashMap<Key, Entry>,
     cap: usize,
 }
 
@@ -72,27 +83,39 @@ impl HitCache {
         let key = (hit.ip, hit.service_types.first().cloned());
         if !self.map.contains_key(&key) && self.map.len() >= self.cap {
             self.map
-                .retain(|_, (_, seen)| now.saturating_duration_since(*seen) < TTL);
+                .retain(|_, e| now.saturating_duration_since(e.seen) < TTL);
             if self.map.len() >= self.cap {
                 return false;
             }
         }
-        self.map.insert(key, (hit.hostname.clone(), now));
+        self.map.insert(
+            key,
+            Entry {
+                hostname: hit.hostname.clone(),
+                friendly_name: hit.friendly_name.clone(),
+                model: hit.model.clone(),
+                manufacturer: hit.manufacturer.clone(),
+                seen: now,
+            },
+        );
         true
     }
 
     /// Unexpired hits, sorted; `fresh` is set for those seen within `fresh_within`.
     pub fn hits(&mut self, now: Instant, fresh_within: Duration) -> Vec<MdnsHit> {
         self.map
-            .retain(|_, (_, seen)| now.saturating_duration_since(*seen) < TTL);
+            .retain(|_, e| now.saturating_duration_since(e.seen) < TTL);
         let mut out: Vec<MdnsHit> = self
             .map
             .iter()
-            .map(|((ip, svc), (host, seen))| MdnsHit {
+            .map(|((ip, svc), e)| MdnsHit {
                 ip: *ip,
-                hostname: host.clone(),
+                hostname: e.hostname.clone(),
                 service_types: svc.iter().cloned().collect(),
-                fresh: now.saturating_duration_since(*seen) <= fresh_within,
+                fresh: now.saturating_duration_since(e.seen) <= fresh_within,
+                friendly_name: e.friendly_name.clone(),
+                model: e.model.clone(),
+                manufacturer: e.manufacturer.clone(),
             })
             .collect();
         out.sort_by(|a, b| (a.ip, &a.service_types).cmp(&(b.ip, &b.service_types)));
@@ -151,6 +174,23 @@ impl MdnsService {
                                                 .map(|a| a.to_ip_addr())
                                                 .collect(),
                                             service_type: r.ty_domain.clone(),
+                                            instance: instance_from_fullname(
+                                                &r.fullname,
+                                                &r.ty_domain,
+                                            )
+                                            .unwrap_or_default(),
+                                            // bounded: a host controls these
+                                            txt: r
+                                                .txt_properties
+                                                .iter()
+                                                .take(32)
+                                                .map(|p| {
+                                                    (
+                                                        p.key().chars().take(64).collect(),
+                                                        p.val_str().chars().take(256).collect(),
+                                                    )
+                                                })
+                                                .collect(),
                                         },
                                         net,
                                     );
@@ -212,6 +252,7 @@ mod tests {
                 vec![svc.to_string()]
             },
             fresh: true,
+            ..Default::default()
         }
     }
 
@@ -240,6 +281,8 @@ mod tests {
                     "10.1.1.1".parse().unwrap(),
                 ],
                 service_type: "_ipp._tcp.local.".into(),
+                instance: String::new(),
+                txt: vec![],
             },
             net,
         );

@@ -6,7 +6,7 @@ use clap::Parser;
 use rhizome::config::Config;
 use rhizome::net::iface::select_now;
 use rhizome::net::iface_select::SelectError;
-use rhizome::scanner::{LiveCollector, Scanner, ScannerConfig};
+use rhizome::scanner::{LiveCollector, LiveOptions, Scanner, ScannerConfig};
 use rhizome::state::hub::Hub;
 use rhizome::store::Store;
 use rhizome::web::{AppState, listen_url, loopback_addr, router};
@@ -57,12 +57,15 @@ async fn main() -> Result<()> {
         None => None,
     };
     let mut scanner = Scanner::new(
-        Box::new(LiveCollector::new(
-            cfg.iface.clone(),
-            cfg.max_hosts,
-            !cfg.no_tcp_probe,
-            Duration::from_secs(cfg.interval + 10),
-        )),
+        Box::new(LiveCollector::new(LiveOptions {
+            iface_override: cfg.iface.clone(),
+            max_hosts: cfg.max_hosts,
+            tcp_probe: !cfg.no_tcp_probe,
+            netbios: !cfg.no_netbios,
+            dns: !cfg.no_dns,
+            upnp: !cfg.no_upnp,
+            fresh_window: Duration::from_secs(cfg.interval + 10),
+        })),
         hub.clone(),
         ScannerConfig {
             interval_s: cfg.interval,
@@ -71,8 +74,8 @@ async fn main() -> Result<()> {
             max_devices: rhizome::state::merge::DEFAULT_MAX_DEVICES,
         },
     );
-    if let Some(store) = store {
-        scanner = scanner.with_store(store);
+    if let Some(store) = &store {
+        scanner = scanner.with_store(store.clone());
     }
     let scan_task = tokio::spawn(scanner.run(shutdown.clone()));
 
@@ -89,7 +92,12 @@ async fn main() -> Result<()> {
         None => tracing::info!("listening on {} iface=none", listen_url(cfg.port)),
     }
 
-    let app = router(AppState::new(hub, cfg.port, shutdown.clone()));
+    // The same store backs the scanner's history and the PUT /api/devices/{id}/meta endpoint.
+    let mut state = AppState::new(hub, cfg.port, shutdown.clone());
+    if let Some(store) = store {
+        state = state.with_store(store);
+    }
+    let app = router(state);
     let serve = axum::serve(listener, app).with_graceful_shutdown({
         let s = shutdown.clone();
         async move { s.cancelled().await }

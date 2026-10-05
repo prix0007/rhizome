@@ -30,6 +30,47 @@ pub fn is_page_navigation(
     is_get && !path.starts_with("/api/") && mode == Some("navigate") && dest == Some("document")
 }
 
+/// State-changing requests need more than a plain GET does: an `Origin` that is
+/// present and exactly ours (not merely absent), and the custom `X-Rhizome: 1`
+/// header, which a cross-origin page cannot send without a preflight we refuse.
+pub fn mutation_allowed(origin: Option<&str>, x_rhizome: &[&str], port: u16) -> bool {
+    origin.is_some() && origin_allowed(origin, port) && x_rhizome == ["1"]
+}
+
+/// Route-level middleware for state-changing routes (runs before the body is read).
+pub async fn mutation_guard(
+    axum::extract::State(st): axum::extract::State<super::AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let headers = req.headers();
+    let origins: Vec<&str> = headers
+        .get_all("origin")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    let xs: Vec<&str> = headers
+        .get_all("x-rhizome")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    let origin = match origins.as_slice() {
+        [one] => Some(*one),
+        _ => None, // absent or duplicated
+    };
+    if !mutation_allowed(origin, &xs, st.port) {
+        return (
+            StatusCode::FORBIDDEN,
+            "forbidden: same-origin request with X-Rhizome required",
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
 /// An absent `Origin` is fine (same-origin GETs and curl); a present one must
 /// be exactly our own origin. `null` and everything else is rejected.
 pub fn origin_allowed(origin: Option<&str>, port: u16) -> bool {
@@ -126,6 +167,26 @@ mod tests {
         ] {
             assert_eq!(host_allowed(h, p), ok, "{h:?}");
         }
+    }
+
+    #[test]
+    fn mutation_table() {
+        let p = 7878;
+        let ok = Some("http://127.0.0.1:7878");
+        assert!(mutation_allowed(ok, &["1"], p));
+        assert!(mutation_allowed(Some("http://localhost:7878"), &["1"], p));
+        assert!(!mutation_allowed(None, &["1"], p), "Origin must be present");
+        assert!(!mutation_allowed(Some("http://evil.com"), &["1"], p));
+        assert!(!mutation_allowed(Some("null"), &["1"], p));
+        assert!(!mutation_allowed(Some("http://127.0.0.1:9"), &["1"], p));
+        assert!(!mutation_allowed(ok, &[], p), "X-Rhizome missing");
+        assert!(!mutation_allowed(ok, &["0"], p));
+        assert!(!mutation_allowed(ok, &["true"], p));
+        assert!(
+            !mutation_allowed(ok, &["1", "1"], p),
+            "duplicates are refused"
+        );
+        assert!(!mutation_allowed(ok, &[""], p));
     }
 
     #[test]

@@ -1,10 +1,16 @@
 pub mod arp;
 pub mod arp_parse;
 pub mod cmd;
+pub mod dns_ptr;
+pub mod enrich;
 pub mod keyed;
 pub mod mdns;
 pub mod mdns_map;
+pub mod netbios;
 pub mod ping;
 pub mod ssdp;
 pub mod ssdp_parse;
 pub mod tcp_probe;
+pub mod ttlcache;
+pub mod upnp;
+pub mod upnp_parse;

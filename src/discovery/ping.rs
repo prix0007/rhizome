@@ -59,7 +59,41 @@ impl PingMethod {
 #[derive(Debug, Default)]
 pub struct SweepResult {
     pub alive: BTreeSet<Ipv4Addr>,
+    /// Round-trip time (and, when the OS hands us the IP header, the reply TTL)
+    /// of each answering host.
+    pub replies: std::collections::BTreeMap<Ipv4Addr, PingReply>,
     pub failures: Vec<PingFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PingReply {
+    pub rtt_ms: f64,
+    pub ttl: Option<u8>,
+}
+
+/// Coarse OS family from a reply TTL. On a LAN there are no hops to subtract,
+/// so the TTL is the sender's initial value: 64 (Linux, Unix, macOS, Android,
+/// iOS), 128 (Windows) or 255 (routers and much embedded gear).
+pub fn os_hint_from_ttl(ttl: u8) -> Option<&'static str> {
+    match ttl {
+        0 => None,
+        1..=64 => Some("Linux/Unix/macOS-like"),
+        65..=128 => Some("Windows-like"),
+        129..=255 => Some("network gear/embedded"),
+    }
+}
+
+/// Average round-trip from `ping -q` output
+/// (`round-trip min/avg/max/stddev = 0.8/0.9/1.0/0.0 ms`).
+pub fn parse_ping_rtt(stdout: &str) -> Option<f64> {
+    let line = stdout.lines().find(|l| l.contains("min/avg/max"))?;
+    let values = line.split('=').nth(1)?.split_whitespace().next()?;
+    let parts: Vec<&str> = values.split('/').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let avg: f64 = parts[1].parse().ok()?;
+    (avg.is_finite() && avg >= 0.0).then_some(avg)
 }
 
 #[cfg(test)]
@@ -112,6 +146,41 @@ mod tests {
             classify_failure(f(Phase::Send, Some(EPERM), true)),
             Verdict::Ignore
         );
+    }
+
+    #[test]
+    fn ttl_maps_to_a_coarse_os_family() {
+        for (ttl, want) in [
+            (64, Some("Linux/Unix/macOS-like")),
+            (63, Some("Linux/Unix/macOS-like")),
+            (1, Some("Linux/Unix/macOS-like")),
+            (65, Some("Windows-like")),
+            (128, Some("Windows-like")),
+            (129, Some("network gear/embedded")),
+            (255, Some("network gear/embedded")),
+            (0, None),
+        ] {
+            assert_eq!(os_hint_from_ttl(ttl), want, "ttl {ttl}");
+        }
+    }
+
+    #[test]
+    fn ping_binary_rtt_is_parsed_from_the_summary_line() {
+        let out = "PING 192.168.0.1 (192.168.0.1): 56 data bytes\n\n--- 192.168.0.1 ping statistics ---\n1 packets transmitted, 1 packets received, 0.0% packet loss\nround-trip min/avg/max/stddev = 1.234/1.500/1.766/0.000 ms\n";
+        assert_eq!(parse_ping_rtt(out), Some(1.5));
+        assert_eq!(
+            parse_ping_rtt("round-trip min/avg/max/stddev = 0.8/0.9/1.0/0.0 ms"),
+            Some(0.9)
+        );
+        for bad in [
+            "",
+            "no summary here",
+            "round-trip min/avg/max/stddev = a/b/c/d ms",
+            "round-trip min/avg/max/stddev = 1/2 ms",
+            "round-trip min/avg/max = -1/NaN/3 ms",
+        ] {
+            assert_eq!(parse_ping_rtt(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
@@ -213,7 +282,7 @@ pub async fn sweep_dgram(
     })?;
     let payload = [0u8; 16];
     let client = &client;
-    let results: Vec<(Ipv4Addr, Result<(), PingFailure>)> = futures_util::stream::iter(
+    let results: Vec<(Ipv4Addr, Result<PingReply, PingFailure>)> = futures_util::stream::iter(
         targets
             .iter()
             .copied()
@@ -223,7 +292,14 @@ pub async fn sweep_dgram(
         let mut p = client.pinger(IpAddr::V4(ip), PingIdentifier(IDENT)).await;
         p.timeout(timeout);
         let r = match p.ping(PingSequence(0), &payload).await {
-            Ok(_) => Ok(()),
+            Ok((packet, rtt)) => Ok(PingReply {
+                rtt_ms: rtt.as_secs_f64() * 1000.0,
+                // On macOS the DGRAM socket hands us the IP header, so the TTL is there.
+                ttl: match packet {
+                    surge_ping::IcmpPacket::V4(v4) => v4.get_ttl(),
+                    _ => None,
+                },
+            }),
             Err(e @ SurgeError::IOError(_)) => Err(PingFailure {
                 phase: Phase::Send,
                 errno: os_errno(&e),
@@ -243,8 +319,9 @@ pub async fn sweep_dgram(
     let mut out = SweepResult::default();
     for (ip, r) in results {
         match r {
-            Ok(()) => {
+            Ok(reply) => {
                 out.alive.insert(ip);
+                out.replies.insert(ip, reply);
             }
             Err(f) if f.errno.is_some() => out.failures.push(f),
             Err(_) => {}
@@ -259,38 +336,51 @@ pub async fn sweep_binary(
     targets: &[Ipv4Addr],
     gateway: Option<Ipv4Addr>,
 ) -> SweepResult {
-    let results: Vec<(Ipv4Addr, bool, Option<PingFailure>)> = futures_util::stream::iter(
-        targets
-            .iter()
-            .copied()
-            .filter(|ip| is_scan_target(*ip, net)),
-    )
-    .map(|ip| async move {
-        let args = [
-            "-c".to_string(),
-            "1".into(),
-            "-W".into(),
-            "500".into(),
-            "-q".into(),
-            ip.to_string(),
-        ];
-        match run_full("/sbin/ping", &args, Duration::from_secs(3)).await {
-            Ok(o) if o.success => (ip, true, None),
-            Ok(o) => (
-                ip,
-                false,
-                binary_failure(ip, gateway, &String::from_utf8_lossy(&o.stderr)),
-            ),
-            Err(_) => (ip, false, None),
-        }
-    })
-    .buffer_unordered(32)
-    .collect()
-    .await;
+    let results: Vec<(Ipv4Addr, Option<PingReply>, Option<PingFailure>)> =
+        futures_util::stream::iter(
+            targets
+                .iter()
+                .copied()
+                .filter(|ip| is_scan_target(*ip, net)),
+        )
+        .map(|ip| async move {
+            let args = [
+                "-c".to_string(),
+                "1".into(),
+                "-W".into(),
+                "500".into(),
+                "-q".into(),
+                ip.to_string(),
+            ];
+            match run_full("/sbin/ping", &args, Duration::from_secs(3)).await {
+                Ok(o) if o.success => {
+                    // `ping -q` prints the round-trip summary; the TTL is not shown without -v.
+                    let rtt = parse_ping_rtt(&String::from_utf8_lossy(&o.stdout));
+                    (
+                        ip,
+                        Some(PingReply {
+                            rtt_ms: rtt.unwrap_or(0.0),
+                            ttl: None,
+                        }),
+                        None,
+                    )
+                }
+                Ok(o) => (
+                    ip,
+                    None,
+                    binary_failure(ip, gateway, &String::from_utf8_lossy(&o.stderr)),
+                ),
+                Err(_) => (ip, None, None),
+            }
+        })
+        .buffer_unordered(32)
+        .collect()
+        .await;
     let mut out = SweepResult::default();
-    for (ip, ok, failure) in results {
-        if ok {
+    for (ip, reply, failure) in results {
+        if let Some(r) = reply {
             out.alive.insert(ip);
+            out.replies.insert(ip, r);
         }
         out.failures.extend(failure);
     }

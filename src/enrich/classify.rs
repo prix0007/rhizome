@@ -9,6 +9,13 @@ pub struct ClassifyInput<'a> {
     pub services: &'a [String],
     pub ssdp_server: Option<&'a str>,
     pub ssdp_types: &'a [String],
+    /// Device self-description (UPnP description, mDNS TXT, user-independent).
+    pub friendly_name: Option<&'a str>,
+    pub manufacturer: Option<&'a str>,
+    pub model: Option<&'a str>,
+    /// Names learned from DNS / NetBIOS (used like the hostname).
+    pub dns_name: Option<&'a str>,
+    pub netbios_name: Option<&'a str>,
     pub is_gw: bool,
     pub is_self: bool,
 }
@@ -45,6 +52,69 @@ const COMPUTER_HOSTNAMES: &[&str] = &[
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| haystack.contains(n))
 }
+
+type Hints = &'static [(&'static [&'static str], DeviceKind)];
+
+/// Substrings of a reported model name.
+const MODEL_HINTS: Hints = &[
+    (
+        &[
+            "homepod",
+            "echo",
+            "sonos",
+            "nest audio",
+            "nest mini",
+            "google home",
+        ],
+        DeviceKind::Speaker,
+    ),
+    (
+        &[
+            "chromecast",
+            "bravia",
+            "google tv",
+            "android tv",
+            "appletv",
+            "apple tv",
+            "roku",
+            "fire tv",
+            "smart tv",
+        ],
+        DeviceKind::Tv,
+    ),
+    (
+        &[
+            "laserjet",
+            "officejet",
+            "deskjet",
+            "designjet",
+            "photosmart",
+            "pixma",
+            "workforce",
+            "ecotank",
+            "hl-l",
+            "mfc-",
+            "printer",
+        ],
+        DeviceKind::Printer,
+    ),
+    (
+        &["archer", "router", "access point", "range extender"],
+        DeviceKind::NetworkGear,
+    ),
+    (&["iphone", "ipad"], DeviceKind::Phone),
+    (
+        &["macbook", "imac", "macmini", "mac mini", "macpro"],
+        DeviceKind::Computer,
+    ),
+];
+
+/// Substrings of a friendly (display) name.
+const FRIENDLY_HINTS: Hints = &[
+    (&["sonos", "homepod"], DeviceKind::Speaker),
+    (&["chromecast", "roku", "smart tv", " tv"], DeviceKind::Tv),
+    (&["printer"], DeviceKind::Printer),
+];
 
 fn has(services: &[String], names: &[&str]) -> bool {
     services.iter().any(|s| names.contains(&s.as_str()))
@@ -103,7 +173,25 @@ pub fn classify(i: &ClassifyInput<'_>) -> DeviceKind {
             }
         }
     }
-    if let Some(v) = i.vendor {
+    // The device's own description of itself (UPnP description / mDNS TXT).
+    if let Some(m) = i.model {
+        let m = m.to_lowercase();
+        for (needles, kind) in MODEL_HINTS {
+            if contains_any(&m, needles) {
+                return *kind;
+            }
+        }
+    }
+    if let Some(f) = i.friendly_name {
+        let f = f.to_lowercase();
+        for (needles, kind) in FRIENDLY_HINTS {
+            if contains_any(&f, needles) {
+                return *kind;
+            }
+        }
+    }
+    // Vendor from the MAC registry, then the manufacturer the device reports.
+    for v in [i.vendor, i.manufacturer].into_iter().flatten() {
         let v = v.to_lowercase();
         for (list, kind) in [
             (PRINTER_VENDORS, DeviceKind::Printer),
@@ -121,7 +209,11 @@ pub fn classify(i: &ClassifyInput<'_>) -> DeviceKind {
     if has(sv, &["_ssh", "_sftp-ssh", "_smb", "_afpovertcp"]) {
         return DeviceKind::Computer;
     }
-    if let Some(h) = i.hostname {
+    // Names, from the most to the least trustworthy source.
+    for h in [i.hostname, i.dns_name, i.netbios_name, i.friendly_name]
+        .into_iter()
+        .flatten()
+    {
         let h = h.to_lowercase();
         if contains_any(&h, PHONE_HOSTNAMES) {
             return DeviceKind::Phone;
@@ -383,6 +475,108 @@ mod tests {
         let i = ClassifyInput {
             services: &s,
             ssdp_types: &mr,
+            ..Default::default()
+        };
+        assert_eq!(classify(&i), DeviceKind::Printer);
+    }
+
+    // ---- model / manufacturer / friendly name ----
+
+    fn described<'a>(
+        friendly: Option<&'a str>,
+        manufacturer: Option<&'a str>,
+        model: Option<&'a str>,
+    ) -> ClassifyInput<'a> {
+        ClassifyInput {
+            friendly_name: friendly,
+            manufacturer,
+            model,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn model_rules() {
+        for (m, want) in [
+            ("Chromecast Ultra", DeviceKind::Tv),
+            ("BRAVIA KD-55X80J", DeviceKind::Tv),
+            ("Google TV Streamer", DeviceKind::Tv),
+            ("AppleTV11,1", DeviceKind::Tv),
+            ("HomePod mini", DeviceKind::Speaker),
+            ("Echo Dot", DeviceKind::Speaker),
+            ("HP LaserJet Pro M404dn", DeviceKind::Printer),
+            ("Brother HL-L2350DW series", DeviceKind::Printer),
+            ("OfficeJet 8015", DeviceKind::Printer),
+            ("Archer AX55", DeviceKind::NetworkGear),
+            ("iPhone14,2", DeviceKind::Phone),
+            ("iPad13,1", DeviceKind::Phone),
+            ("MacBookPro18,3", DeviceKind::Computer),
+            ("Macmini9,1", DeviceKind::Computer),
+        ] {
+            assert_eq!(classify(&described(None, None, Some(m))), want, "{m}");
+        }
+    }
+
+    #[test]
+    fn friendly_name_and_manufacturer_rules() {
+        assert_eq!(
+            classify(&described(Some("Sonos Beam"), None, None)),
+            DeviceKind::Speaker
+        );
+        assert_eq!(
+            classify(&described(Some("Samsung Smart TV"), None, None)),
+            DeviceKind::Tv
+        );
+        assert_eq!(
+            classify(&described(None, Some("Roku, Inc."), None)),
+            DeviceKind::Tv
+        );
+        assert_eq!(
+            classify(&described(None, Some("TP-Link"), None)),
+            DeviceKind::NetworkGear
+        );
+    }
+
+    #[test]
+    fn generic_descriptions_do_not_classify_and_gateway_still_wins() {
+        assert_eq!(
+            classify(&described(Some("My thing"), Some("Acme"), Some("X-100"))),
+            DeviceKind::Unknown
+        );
+        let i = ClassifyInput {
+            is_gw: true,
+            model: Some("Chromecast"),
+            ..Default::default()
+        };
+        assert_eq!(classify(&i), DeviceKind::Gateway);
+        let i = ClassifyInput {
+            is_self: true,
+            model: Some("MacBookPro18,3"),
+            ..Default::default()
+        };
+        assert_eq!(classify(&i), DeviceKind::ThisMachine);
+    }
+
+    #[test]
+    fn dns_and_netbios_names_work_like_the_hostname() {
+        let i = ClassifyInput {
+            dns_name: Some("annas-iphone.lan"),
+            ..Default::default()
+        };
+        assert_eq!(classify(&i), DeviceKind::Phone);
+        let i = ClassifyInput {
+            netbios_name: Some("LAPTOP-7F3K"),
+            ..Default::default()
+        };
+        assert_eq!(classify(&i), DeviceKind::Computer);
+    }
+
+    #[test]
+    fn a_strong_service_still_beats_a_model_hint() {
+        let s = vec!["_ipp".to_string()];
+        let i = ClassifyInput {
+            services: &s,
+            model: Some("Chromecast"),
             ..Default::default()
         };
         assert_eq!(classify(&i), DeviceKind::Printer);
