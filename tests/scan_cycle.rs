@@ -487,10 +487,7 @@ async fn failed_collect_emits_the_flip_events_to_clients() {
     let hub = Arc::new(Hub::new(64));
     let mut s = scanner(
         vec![
-            Ok(ping_all(collected(vec![e(
-                "192.168.0.82",
-                "2:0:0:0:0:62",
-            )]))),
+            Ok(ping_all(collected(vec![e("192.168.0.82", "2:0:0:0:0:62")]))),
             Err("down".into()),
         ],
         hub.clone(),
