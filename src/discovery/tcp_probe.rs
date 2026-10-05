@@ -71,7 +71,9 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();
         drop(l);
-        assert!(probe_one(addr, Duration::from_millis(500)).await);
+        // Windows retries a refused connect for about two seconds before
+        // reporting it, so allow well past that.
+        assert!(probe_one(addr, Duration::from_secs(5)).await);
     }
 
     #[tokio::test]
