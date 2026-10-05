@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Rhizome - live 3D map of your local network</title>
+<meta name="description" content="Rhizome maps every device on your local network in a live 3D graph. It runs entirely on your machine: no cloud, no account, no telemetry. Download for macOS, Linux and Windows.">
+<link rel="canonical" href="__PAGE_URL__">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<meta name="theme-color" content="#07100f">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Rhizome - live 3D map of your local network">
+<meta property="og:description" content="See every device on your network in a live 3D graph. Runs locally; your data never leaves your machine.">
+<meta property="og:url" content="__PAGE_URL__">
+<meta property="og:image" content="__PAGE_URL__logo.svg">
+<meta name="twitter:card" content="summary">
+<style>
+  :root {
+    --bg: #07100f; --panel: #0d1917; --line: #1d302c; --text: #dcebe5;
+    --dim: #86a39a; --amber: #f2b84b; --green: #5fe08a; --blue: #5ab0ff;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 56px 16px 72px; }
+  header { display: flex; gap: 20px; align-items: center; margin-bottom: 40px; }
+  header img { width: 88px; height: 88px; flex: none; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: 0.12em; }
+  h2 { margin: 48px 0 16px; font-size: 14px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+  p { margin: 8px 0; }
+  .lede { color: var(--dim); max-width: 60ch; }
+  a { color: var(--green); }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card {
+    display: block; padding: 16px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); color: inherit; text-decoration: none;
+  }
+  .card:hover, .card:focus-visible { border-color: var(--green); outline: none; }
+  .card.match { border-color: var(--amber); }
+  .card strong { display: block; font-size: 17px; }
+  .card span { display: block; color: var(--dim); font-size: 13px; }
+  .card .tag { color: var(--amber); }
+  pre {
+    margin: 12px 0; padding: 14px; overflow-x: auto; border: 1px solid var(--line);
+    border-radius: 6px; background: var(--panel); font-size: 14px;
+  }
+  ul { padding-left: 20px; }
+  footer { margin-top: 56px; color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="logo.svg" alt="Rhizome logo" width="88" height="88">
+    <div>
+      <h1>RHIZOME</h1>
+      <p class="lede">A live 3D map of every device on your local network. One small program, opened in your browser. Nothing leaves your machine.</p>
+    </div>
+  </header>
+
+  <h2>Download</h2>
+  <div class="grid" id="downloads">
+    <a class="card" data-os="mac" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-apple-darwin.tar.gz">
+      <strong>macOS, Apple Silicon</strong><span>M1 and later · .tar.gz</span>
+    </a>
+    <a class="card" data-os="mac" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-apple-darwin.tar.gz">
+      <strong>macOS, Intel</strong><span>x86_64 · .tar.gz</span>
+    </a>
+    <a class="card" data-os="linux" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-unknown-linux-gnu.tar.gz">
+      <strong>Linux, x86_64</strong><span>glibc 2.35+ · .tar.gz</span>
+    </a>
+    <a class="card" data-os="linux" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-unknown-linux-gnu.tar.gz">
+      <strong>Linux, ARM64</strong><span>Raspberry Pi 4/5 (64-bit), ARM servers · .tar.gz</span>
+    </a>
+    <a class="card" data-os="win" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-pc-windows-msvc.zip">
+      <strong>Windows, x86_64</strong><span>Windows 10 and 11 · .zip</span>
+    </a>
+    <a class="card" data-os="win" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-pc-windows-msvc.zip">
+      <strong>Windows, ARM64</strong><span>Windows 11 on ARM · .zip</span>
+    </a>
+  </div>
+  <p class="lede">
+    Checksums: <a href="https://github.com/__REPO__/releases/latest/download/SHA256SUMS">SHA256SUMS</a> ·
+    <a href="https://github.com/__REPO__/releases">All releases</a> ·
+    <a href="https://github.com/__REPO__">Source</a>
+  </p>
+
+  <h2>Run it</h2>
+  <pre>tar -xzf rhizome-*.tar.gz
+cd rhizome-*
+./rhizome</pre>
+  <p>Then open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> in your browser.</p>
+  <ul>
+    <li><strong>macOS:</strong> the binary is not notarised. If macOS blocks it, run <code>xattr -d com.apple.quarantine ./rhizome</code>, and allow Local Network access for your terminal when asked.</li>
+    <li><strong>Windows:</strong> unzip, then run <code>rhizome.exe</code> from a terminal.</li>
+    <li><strong>From source:</strong> <code>cargo run --release</code> with a recent Rust toolchain.</li>
+  </ul>
+
+  <h2>What it does</h2>
+  <ul>
+    <li>Finds devices on your subnet and shows vendor, name and type where they can be learned.</li>
+    <li>Updates live as devices join and leave, and remembers when each was first and last seen.</li>
+    <li>Listens on 127.0.0.1 only. No cloud service, no account, no telemetry.</li>
+  </ul>
+  <p class="lede">Only scan networks you own or are allowed to scan.</p>
+
+  <footer>Rhizome is open source. <a href="https://github.com/__REPO__">github.com/__REPO__</a></footer>
+</main>
+<script>
+  (function () {
+    var ua = navigator.userAgent, p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    var os = /Win/i.test(p) ? "win" : /Mac/i.test(p) ? "mac" : /Linux|X11/i.test(p + ua) ? "linux" : null;
+    if (!os) return;
+    var cards = document.querySelectorAll('.card[data-os="' + os + '"]');
+    for (var i = 0; i < cards.length; i++) cards[i].classList.add("match");
+  })();
+</script>
+</body>
+</html>
