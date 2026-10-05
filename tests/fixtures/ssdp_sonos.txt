@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+Cache-Control: max-age = 1800
+st: urn:schemas-upnp-org:device:MediaRenderer:1
+usn: uuid:RINCON_ABC::urn:schemas-upnp-org:device:MediaRenderer:1
+server: Linux UPnP/1.0 Sonos/70.3-88200 (ZPS9)
+location: http://192.168.0.60:1400/xml/device_description.xml
+

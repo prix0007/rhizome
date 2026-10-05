@@ -1,0 +1,10 @@
+Registry,Assignment,Organization Name,Organization Address
+MA-L,687FF0,"Acme Networks, Inc.","1 Main St,
+Springfield US"
+MA-L,8CFD49,Plain Vendor Ltd,Somewhere
+MA-L,00A0c9,"Quote ""Corp""",x
+MA-L,ZZZZZZ,Bad Hex,x
+MA-L,12345,Too Short,x
+MA-S,AABBCC,Wrong Registry Still Parsed,x
+MA-L,687FF0,Duplicate Prefix Row,x
+MA-L,001122,,empty name

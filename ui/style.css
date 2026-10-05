@@ -1,0 +1,16 @@
+html, body { margin: 0; height: 100%; background: #05070d; color: #cfd8e3; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; overflow: hidden; }
+#graph { position: fixed; inset: 0; }
+#statusbar { position: fixed; left: 12px; bottom: 10px; padding: 4px 10px; background: rgba(15, 20, 32, 0.8); border-radius: 6px; color: #8fa3b8; pointer-events: none; }
+#banners { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; max-width: 80%; }
+.banner { padding: 8px 14px; background: #4a2a12; border: 1px solid #ff9a3d; color: #ffd9b0; border-radius: 6px; }
+#panel { position: fixed; top: 12px; right: 12px; width: 280px; padding: 12px 14px; background: rgba(15, 20, 32, 0.92); border: 1px solid #243047; border-radius: 8px; }
+#panel[hidden] { display: none; }
+#panel h2 { margin: 0 24px 8px 0; font-size: 15px; word-break: break-all; }
+#panel dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
+#panel dt { color: #7d8fa6; }
+#panel dd { margin: 0; word-break: break-all; }
+#panel-close { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: #8fa3b8; font-size: 20px; cursor: pointer; }
+#legend { position: fixed; left: 12px; top: 10px; color: #8fa3b8; background: rgba(15, 20, 32, 0.7); padding: 4px 10px; border-radius: 6px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 4px 0 10px; }
+.dot.gw { background: #ffc247; } .dot.me { background: #3ddcff; } .dot.on { background: #6ee7a8; }
+.dot.new { background: #ff7a3d; } .dot.off { background: rgba(150, 150, 150, 0.45); }

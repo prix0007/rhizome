@@ -1,0 +1,31 @@
+[package]
+name = "rhizome"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive"] }
+directories = "6.0.0"
+futures-util = "0.3.34"
+ipnet = "2.12.2"
+mdns-sd = "0.21.5"
+netdev = "0.46.3"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rust-embed = { version = "8.12.0", features = ["include-exclude", "mime-guess"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+socket2 = "0.6.5"
+surge-ping = "0.9.1"
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "process", "time", "sync", "signal", "io-util"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tokio-util = "0.7.19"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }

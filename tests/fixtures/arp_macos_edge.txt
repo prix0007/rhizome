@@ -1,0 +1,10 @@
+? (10.0.0.1) at 0:11:22:33:44:55 on en0 ifscope [ethernet]
+
+   
+garbage line with no structure
+? (10.0.0.2) at aa:bb:cc:dd:ee:ff on utun3 [ethernet]  
+? (10.0.0.3) at 0:2:3:4:5:6 on bridge100 ifscope [ethernet]
+? (not-an-ip) at 1:2:3:4:5:6 on en0
+? (10.0.0.4) at zz:zz on en0
+router.lan (10.0.0.9) at 0:1:2:3:4:5 on en0 ifscope [ethernet]
+? (10.0.0.5) at
