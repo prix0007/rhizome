@@ -15,7 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use super::upnp_parse::{
-    MAX_RESPONSE_BYTES, UpnpInfo, parse_description, parse_http_response, validate_location,
+    IgdService, MAX_RESPONSE_BYTES, UpnpInfo, parse_description, parse_http_response,
+    parse_igd_service, resolve_control, validate_location,
 };
 use crate::model::SsdpObservation;
 
@@ -28,31 +29,28 @@ pub const FAILURE_TTL_MS: i64 = 30 * 60 * 1000;
 pub const MAX_FETCHES_PER_CYCLE: usize = 16;
 pub const FETCH_CONCURRENCY: usize = 4;
 
-/// Fetch and parse the description at `addr` + `path`, applying no address
-/// policy (callers go through `fetch_location`). `None` on any failure.
-pub async fn fetch_description_at(
+/// One plain-HTTP exchange with a host on the LAN: connect (short timeout),
+/// write `request`, read at most `MAX_RESPONSE_BYTES` plus headers, all under a
+/// total timeout. No redirects, no proxies, no TLS, no environment. Returns the
+/// raw response bytes, or `None` on any failure. The caller has already applied
+/// the address policy.
+pub async fn http_exchange(
     addr: SocketAddrV4,
-    path: &str,
+    request: &[u8],
     connect_timeout: Duration,
     total_timeout: Duration,
-) -> Option<UpnpInfo> {
+) -> Option<Vec<u8>> {
     let work = async {
         let mut stream = tokio::time::timeout(connect_timeout, TcpStream::connect(addr))
             .await
             .ok()?
             .ok()?;
-        let request = format!(
-            "GET {path} HTTP/1.0\r\nHost: {}:{}\r\nUser-Agent: rhizome\r\nAccept: text/xml\r\nConnection: close\r\n\r\n",
-            addr.ip(),
-            addr.port()
-        );
-        stream.write_all(request.as_bytes()).await.ok()?;
+        stream.write_all(request).await.ok()?;
         // Cap everything we are willing to read (headers + body).
         let mut raw = Vec::new();
         let limit = (MAX_RESPONSE_BYTES + 20 * 1024) as u64;
         stream.take(limit).read_to_end(&mut raw).await.ok()?;
-        let body = parse_http_response(&raw)?;
-        parse_description(&body)
+        Some(raw)
     };
     tokio::time::timeout(total_timeout, work)
         .await
@@ -60,17 +58,66 @@ pub async fn fetch_description_at(
         .flatten()
 }
 
+/// A fetched description: what it says about the device, and the raw WAN
+/// counter service entry (not yet policy-checked) if it has one.
+pub struct Fetched {
+    pub info: UpnpInfo,
+    pub igd: Option<IgdService>,
+}
+
+/// Fetch and parse the description at `addr` + `path`, applying no address
+/// policy (callers go through `fetch_location`). `None` on any failure.
+pub async fn fetch_full_at(
+    addr: SocketAddrV4,
+    path: &str,
+    connect_timeout: Duration,
+    total_timeout: Duration,
+) -> Option<Fetched> {
+    let request = format!(
+        "GET {path} HTTP/1.0\r\nHost: {}:{}\r\nUser-Agent: rhizome\r\nAccept: text/xml\r\nConnection: close\r\n\r\n",
+        addr.ip(),
+        addr.port()
+    );
+    let raw = http_exchange(addr, request.as_bytes(), connect_timeout, total_timeout).await?;
+    let body = parse_http_response(&raw)?;
+    let info = parse_description(&body);
+    let igd = parse_igd_service(&body);
+    if info.is_none() && igd.is_none() {
+        return None;
+    }
+    Some(Fetched {
+        info: info.unwrap_or_default(),
+        igd,
+    })
+}
+
+/// Like `fetch_full_at` but only the descriptive fields.
+pub async fn fetch_description_at(
+    addr: SocketAddrV4,
+    path: &str,
+    connect_timeout: Duration,
+    total_timeout: Duration,
+) -> Option<UpnpInfo> {
+    fetch_full_at(addr, path, connect_timeout, total_timeout)
+        .await
+        .map(|f| f.info)
+}
+
 /// The policy-checked entry point: `location` must be an `http://` IPv4 URL for
-/// exactly `from`, an in-subnet scan target.
+/// exactly `from`, an in-subnet scan target. The router's WAN counter endpoint,
+/// if present, is resolved under the same policy and returned in `info.igd`.
 pub async fn fetch_location(location: &str, from: Ipv4Addr, net: Ipv4Net) -> Option<UpnpInfo> {
     let target = validate_location(location, from, net)?;
-    fetch_description_at(
+    let f = fetch_full_at(
         SocketAddrV4::new(target.ip, target.port),
         &target.path,
         CONNECT_TIMEOUT,
         TOTAL_TIMEOUT,
     )
-    .await
+    .await?;
+    let mut info = f.info;
+    info.igd = f.igd.and_then(|svc| resolve_control(&target, &svc, net));
+    Some(info)
 }
 
 /// One LOCATION per host (the lexicographically first, so the choice is stable),

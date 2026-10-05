@@ -9,6 +9,7 @@ use rhizome::net::iface_select::SelectError;
 use rhizome::scanner::{LiveCollector, LiveOptions, Scanner, ScannerConfig};
 use rhizome::state::hub::Hub;
 use rhizome::store::Store;
+use rhizome::traffic::{IgdSlot, TrafficHub, TrafficOptions};
 use rhizome::web::{AppState, listen_url, loopback_addr, router};
 use tokio_util::sync::CancellationToken;
 
@@ -42,6 +43,8 @@ async fn main() -> Result<()> {
     })?;
 
     let hub = Arc::new(Hub::new(256));
+    let traffic = Arc::new(TrafficHub::new(cfg.capture));
+    let igd = Arc::new(IgdSlot::default());
     let shutdown = CancellationToken::new();
     let store = match cfg.db_path() {
         Some(path) => match Store::open(&path) {
@@ -64,6 +67,7 @@ async fn main() -> Result<()> {
             netbios: !cfg.no_netbios,
             dns: !cfg.no_dns,
             upnp: !cfg.no_upnp,
+            igd: Some(igd.clone()),
             fresh_window: Duration::from_secs(cfg.interval + 10),
         })),
         hub.clone(),
@@ -77,7 +81,19 @@ async fn main() -> Result<()> {
     if let Some(store) = &store {
         scanner = scanner.with_store(store.clone());
     }
+    scanner = scanner.with_traffic(traffic.clone());
     let scan_task = tokio::spawn(scanner.run(shutdown.clone()));
+    // Host throughput, link info, WAN counters and (opt-in) packet-flow summaries.
+    tokio::spawn(rhizome::traffic::run(
+        traffic.clone(),
+        hub.clone(),
+        TrafficOptions {
+            capture: cfg.capture,
+            wan: !cfg.no_upnp,
+            igd,
+        },
+        shutdown.clone(),
+    ));
 
     match &sel {
         Some(sel) => tracing::info!(
@@ -93,7 +109,7 @@ async fn main() -> Result<()> {
     }
 
     // The same store backs the scanner's history and the PUT /api/devices/{id}/meta endpoint.
-    let mut state = AppState::new(hub, cfg.port, shutdown.clone());
+    let mut state = AppState::new(hub, cfg.port, shutdown.clone()).with_traffic(traffic);
     if let Some(store) = store {
         state = state.with_store(store);
     }

@@ -15,6 +15,8 @@ pub struct UpnpInfo {
     pub manufacturer: Option<String>,
     pub model_name: Option<String>,
     pub model_number: Option<String>,
+    /// Where to read the router's WAN byte counters, if it offers them.
+    pub igd: Option<IgdControl>,
 }
 
 impl UpnpInfo {
@@ -24,6 +26,151 @@ impl UpnpInfo {
             .clone()
             .or_else(|| self.model_number.clone())
     }
+}
+
+/// The router's `WANCommonInterfaceConfig` service, after the URL policy check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IgdControl {
+    pub ip: Ipv4Addr,
+    pub port: u16,
+    pub path: String,
+    pub service_type: String,
+}
+
+/// The raw service entry found in a description (before any policy check).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IgdService {
+    pub service_type: String,
+    pub control_url: String,
+}
+
+/// Find the `WANCommonInterfaceConfig` service anywhere in the device tree
+/// (it lives on the embedded WANDevice). Same strict XML rules as
+/// `parse_description`: a DOCTYPE is rejected, entities are never expanded.
+pub fn parse_igd_service(xml: &[u8]) -> Option<IgdService> {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    const WAN_COMMON: &str = "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:";
+    let mut reader = Reader::from_reader(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let (mut svc_type, mut control, mut text) = (String::new(), String::new(), String::new());
+    let mut capture: Option<bool> = None; // Some(true) = serviceType, Some(false) = controlURL
+    let mut found: Option<IgdService> = None;
+    for _ in 0..MAX_XML_EVENTS {
+        buf.clear();
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(e) => {
+                if stack.len() >= MAX_XML_DEPTH {
+                    return None;
+                }
+                let name = e.local_name().as_ref().to_string();
+                if name == "service" {
+                    svc_type.clear();
+                    control.clear();
+                }
+                let in_service = stack.last().is_some_and(|p| p == "service");
+                capture = match (in_service, name.as_str()) {
+                    (true, "serviceType") => Some(true),
+                    (true, "controlURL") => Some(false),
+                    _ => None,
+                };
+                stack.push(name);
+                text.clear();
+            }
+            Event::End(_) => {
+                match capture.take() {
+                    Some(true) => svc_type = text.trim().to_string(),
+                    Some(false) => control = text.trim().to_string(),
+                    None => {}
+                }
+                if stack.pop().as_deref() == Some("service")
+                    && found.is_none()
+                    && svc_type.starts_with(WAN_COMMON)
+                    && !control.is_empty()
+                {
+                    found = Some(IgdService {
+                        service_type: svc_type.clone(),
+                        control_url: control.clone(),
+                    });
+                }
+                text.clear();
+            }
+            Event::Text(t) if capture.is_some() => text.push_str(&t),
+            Event::CData(c) if capture.is_some() => text.push_str(&c),
+            Event::GeneralRef(r) if capture.is_some() => {
+                if let Ok(Some(ch)) = r.resolve_char_ref() {
+                    text.push(ch);
+                } else {
+                    match &*r {
+                        "amp" => text.push('&'),
+                        "lt" => text.push('<'),
+                        "gt" => text.push('>'),
+                        "quot" => text.push('"'),
+                        "apos" => text.push('\''),
+                        _ => {}
+                    }
+                }
+            }
+            Event::DocType(_) => return None,
+            Event::Eof => return if stack.is_empty() { found } else { None },
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Turn a `controlURL` from the description into a checked control endpoint.
+/// Relative values resolve against the description's own address; an absolute
+/// `http://` URL must satisfy exactly the same policy as the description fetch
+/// (the router's own in-subnet address). `None` otherwise.
+pub fn resolve_control(loc: &Target, svc: &IgdService, net: Ipv4Net) -> Option<IgdControl> {
+    const WAN_COMMON: &str = "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:";
+    let st_ok = svc.service_type.len() <= 100
+        && svc.service_type.starts_with(WAN_COMMON)
+        && svc
+            .service_type
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-'));
+    let url = svc.control_url.as_str();
+    if !st_ok
+        || url.is_empty()
+        || url.len() > MAX_PATH_LEN
+        || url.chars().any(|c| c.is_control() || c == ' ')
+    {
+        return None;
+    }
+    if !is_scan_target(loc.ip, net) {
+        return None;
+    }
+    let (port, path) = if url
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+    {
+        let t = validate_location(url, loc.ip, net)?;
+        (t.port, t.path)
+    } else if url.contains("://") || url.starts_with("//") {
+        return None;
+    } else {
+        let bare = url.split(['?', '#']).next().unwrap_or("");
+        let path = if bare.starts_with('/') {
+            bare.to_string()
+        } else {
+            let dir = &loc.path[..=loc.path.rfind('/')?];
+            format!("{dir}{bare}")
+        };
+        if path.len() > MAX_PATH_LEN || path.split('/').any(|seg| seg == "..") {
+            return None;
+        }
+        (loc.port, path)
+    };
+    Some(IgdControl {
+        ip: loc.ip,
+        port,
+        path,
+        service_type: svc.service_type.clone(),
+    })
 }
 
 /// Where a LAN host asked us to fetch from, after the policy check.
@@ -557,5 +704,135 @@ mod tests {
         for n in 0..SONY.len() {
             let _ = parse_description(&SONY.as_bytes()[..n]);
         }
+    }
+
+    // ---- IGD control URL ----
+
+    const IGD: &str = r#"<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0"><device>
+  <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>
+  <friendlyName>Test Router</friendlyName>
+  <serviceList><service><serviceType>urn:schemas-upnp-org:service:Layer3Forwarding:1</serviceType><controlURL>/ctl/L3F</controlURL></service></serviceList>
+  <deviceList><device>
+    <deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType>
+    <serviceList><service>
+      <serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType>
+      <serviceId>urn:upnp-org:serviceId:WANCommonIFC1</serviceId>
+      <controlURL>/ctl/CmnIfCfg</controlURL><eventSubURL>/evt/CmnIfCfg</eventSubURL>
+    </service></serviceList>
+    <deviceList><device><deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+      <serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl/IPConn</controlURL></service></serviceList>
+    </device></deviceList>
+  </device></deviceList>
+</device></root>"#;
+
+    fn target() -> Target {
+        Target {
+            ip: ip("192.168.0.1"),
+            port: 1900,
+            path: "/dev/rootDesc.xml".into(),
+        }
+    }
+
+    #[test]
+    fn finds_the_wan_common_interface_config_control_url_on_the_embedded_device() {
+        let s = parse_igd_service(IGD.as_bytes()).unwrap();
+        assert_eq!(
+            s.service_type,
+            "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1"
+        );
+        assert_eq!(
+            s.control_url, "/ctl/CmnIfCfg",
+            "not the WANIPConnection or Layer3Forwarding control URL"
+        );
+    }
+
+    #[test]
+    fn no_igd_service_doctype_and_garbage() {
+        assert_eq!(parse_igd_service(SONY.as_bytes()), None);
+        assert_eq!(parse_igd_service(b""), None);
+        let xxe = IGD.replace(
+            "<?xml version=\"1.0\"?>",
+            "<!DOCTYPE r [<!ENTITY e SYSTEM \"file:///etc/passwd\">]>",
+        );
+        assert_eq!(parse_igd_service(xxe.as_bytes()), None);
+        assert_eq!(parse_igd_service(&IGD.as_bytes()[..200]), None, "truncated");
+        let no_ctl = "<root><device><service><serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType></service></device></root>";
+        assert_eq!(parse_igd_service(no_ctl.as_bytes()), None);
+    }
+
+    #[test]
+    fn relative_control_urls_resolve_against_the_description_address() {
+        let svc = |u: &str| IgdService {
+            service_type: "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1".into(),
+            control_url: u.into(),
+        };
+        let c = resolve_control(&target(), &svc("/ctl/CmnIfCfg"), net()).unwrap();
+        assert_eq!(
+            (c.ip, c.port, c.path.as_str()),
+            (ip("192.168.0.1"), 1900, "/ctl/CmnIfCfg")
+        );
+        let c = resolve_control(&target(), &svc("ctl/x"), net()).unwrap();
+        assert_eq!(
+            c.path, "/dev/ctl/x",
+            "relative to the description's directory"
+        );
+        let c = resolve_control(&target(), &svc("/ctl/x?y=1#z"), net()).unwrap();
+        assert_eq!(c.path, "/ctl/x", "query and fragment are dropped");
+    }
+
+    #[test]
+    fn absolute_control_urls_must_pass_the_same_policy_as_the_description_fetch() {
+        let svc = |u: &str| IgdService {
+            service_type: "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1".into(),
+            control_url: u.into(),
+        };
+        let ok = resolve_control(&target(), &svc("http://192.168.0.1:5000/ctl/c"), net()).unwrap();
+        assert_eq!((ok.port, ok.path.as_str()), (5000, "/ctl/c"));
+        for bad in [
+            "http://192.168.0.99/ctl", // another LAN host
+            "http://8.8.8.8/ctl",
+            "https://192.168.0.1/ctl",
+            "http://router.lan/ctl",
+            "http://user@192.168.0.1/ctl",
+            "//192.168.0.1/ctl",
+            "http://127.0.0.1/ctl",
+            "ftp://192.168.0.1/x",
+        ] {
+            assert_eq!(resolve_control(&target(), &svc(bad), net()), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn control_urls_with_control_characters_or_absurd_length_are_refused() {
+        let svc = |u: String| IgdService {
+            service_type: "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1".into(),
+            control_url: u,
+        };
+        assert_eq!(resolve_control(&target(), &svc("/a b".into()), net()), None);
+        assert_eq!(
+            resolve_control(&target(), &svc("/a\r\nHost: x".into()), net()),
+            None
+        );
+        assert_eq!(
+            resolve_control(&target(), &svc(format!("/{}", "a".repeat(600))), net()),
+            None
+        );
+        assert_eq!(resolve_control(&target(), &svc(String::new()), net()), None);
+    }
+
+    #[test]
+    fn a_service_type_that_is_not_the_one_we_expect_is_refused() {
+        let svc = IgdService {
+            service_type: "urn:evil:service:Other:1".into(),
+            control_url: "/ctl".into(),
+        };
+        assert_eq!(resolve_control(&target(), &svc, net()), None);
+        let injected = IgdService {
+            service_type: "urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1\"\r\nX: y"
+                .into(),
+            control_url: "/ctl".into(),
+        };
+        assert_eq!(resolve_control(&target(), &injected, net()), None);
     }
 }

@@ -131,11 +131,13 @@ pub struct MdnsService {
 impl MdnsService {
     /// Start browsing on `iface` only (IPv4). Must be called inside a tokio runtime.
     /// Hits from addresses outside `net` are ignored. Fails without side effects.
-    pub fn start(iface: &str, net: Ipv4Net) -> Result<Self, String> {
+    pub fn start(iface_ip: std::net::Ipv4Addr, net: Ipv4Net) -> Result<Self, String> {
         let daemon = ServiceDaemon::new().map_err(|e| e.to_string())?;
         let setup = || -> Result<(), mdns_sd::Error> {
             daemon.disable_interface(IfKind::All)?;
-            daemon.enable_interface(IfKind::Name(iface.to_string()))?;
+            // By address, not name: interface names differ per OS (and are GUIDs on
+            // Windows), the selected address does not.
+            daemon.enable_interface(IfKind::Addr(std::net::IpAddr::V4(iface_ip)))?;
             daemon.disable_interface(IfKind::IPv6)?;
             Ok(())
         };
@@ -363,12 +365,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs a real LAN and multicast; set RHIZOME_TEST_IFACE (e.g. en0) and RHIZOME_TEST_NET"]
+    #[ignore = "needs a real LAN and multicast; set RHIZOME_TEST_IP and RHIZOME_TEST_NET"]
     async fn live_browse_coexists_with_mdnsresponder() {
-        let iface = std::env::var("RHIZOME_TEST_IFACE").unwrap();
+        let iface = std::env::var("RHIZOME_TEST_IP").unwrap().parse().unwrap();
         let net: Ipv4Net = std::env::var("RHIZOME_TEST_NET").unwrap().parse().unwrap();
         let svc =
-            MdnsService::start(&iface, net).expect("mdns-sd must start alongside mDNSResponder");
+            MdnsService::start(iface, net).expect("mdns-sd must start alongside mDNSResponder");
         tokio::time::sleep(Duration::from_secs(10)).await;
         let hits = svc.hits(Duration::from_secs(30));
         for h in &hits {

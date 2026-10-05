@@ -1,0 +1,7 @@
+# Tests compare exact bytes of fixtures; keep line endings as committed on every OS.
+* text=auto eol=lf
+*.png binary
+*.woff2 binary
+*.ico binary
+tests/fixtures/*.txt -text
+data/oui.csv -text

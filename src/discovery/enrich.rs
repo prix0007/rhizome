@@ -87,6 +87,8 @@ pub struct Enricher {
     dns: Mutex<TtlCache<Ipv4Addr, Lookup>>,
     netbios: Mutex<TtlCache<Ipv4Addr, Lookup>>,
     opts: EnrichOptions,
+    /// Receives the gateway's WAN counter endpoint when its description has one.
+    igd: Option<std::sync::Arc<crate::traffic::IgdSlot>>,
 }
 
 /// Hosts we may probe: in-subnet unicast targets other than ourselves, sorted, unique.
@@ -118,7 +120,13 @@ impl Enricher {
             dns: Mutex::new(TtlCache::new(CACHE_CAP)),
             netbios: Mutex::new(TtlCache::new(CACHE_CAP)),
             opts,
+            igd: None,
         }
+    }
+
+    pub fn with_igd(mut self, slot: Option<std::sync::Arc<crate::traffic::IgdSlot>>) -> Self {
+        self.igd = slot;
+        self
     }
 
     pub async fn run(&self, i: EnrichInput<'_>) -> EnrichOutput {
@@ -128,6 +136,13 @@ impl Enricher {
             self.dns_step(&i, &hosts),
             self.netbios_step(&i, &hosts),
         );
+        // Hand the gateway's WAN counter endpoint to the traffic poller (never with
+        // --no-upnp: the description is not fetched then, so there is none).
+        if let (Some(slot), Some(gw), true) = (&self.igd, i.gateway, self.opts.upnp)
+            && let Some(entry) = lock(&self.upnp).get(&gw, i.now)
+        {
+            slot.set(entry.as_ref().and_then(|u| u.igd.clone()));
+        }
         let mut out = EnrichOutput::default();
         out.warnings.extend(w_upnp);
         out.warnings.extend(w_dns);

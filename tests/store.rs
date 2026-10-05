@@ -1,4 +1,5 @@
 mod common;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use common::device;
@@ -107,6 +108,7 @@ fn meta_get_set_overwrite() {
     assert_eq!(s.get_meta("m", "baseline_at").unwrap(), None);
 }
 
+#[cfg(unix)]
 #[test]
 fn file_is_0600_and_new_directory_is_0700() {
     let dir = tempfile::tempdir().unwrap();
@@ -124,6 +126,7 @@ fn file_is_0600_and_new_directory_is_0700() {
     assert_eq!(dmode, 0o700, "{dmode:o}");
 }
 
+#[cfg(unix)]
 #[test]
 fn existing_parent_directory_permissions_are_left_alone() {
     let dir = tempfile::tempdir().unwrap();
@@ -135,6 +138,7 @@ fn existing_parent_directory_permissions_are_left_alone() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn loose_existing_file_is_tightened() {
     let dir = tempfile::tempdir().unwrap();

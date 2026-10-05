@@ -25,7 +25,7 @@ serde_json = "1.0.151"
 socket2 = "0.6.5"
 surge-ping = "0.9.1"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "process", "time", "sync", "signal", "io-util"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "process", "time", "sync", "signal", "io-util", "fs"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tokio-util = "0.7.19"
 tracing = "0.1.44"

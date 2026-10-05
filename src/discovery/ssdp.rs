@@ -116,6 +116,9 @@ pub async fn search(
                     break;
                 }
             }
+            // Windows reports an earlier ICMP "port unreachable" as ConnectionReset on
+            // the next receive; that is not the end of the window.
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
             Ok(Err(_)) => break,
             Ok(Ok((n, SocketAddr::V4(from)))) => {
                 let ip = *from.ip();

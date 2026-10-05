@@ -28,6 +28,8 @@ pub struct AppState {
     /// Serialises the read-modify-write-commit of `PUT .../meta`, so overlapping
     /// edits of different fields cannot revert each other.
     pub meta_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Live traffic measurements (`/api/traffic` and the SSE `traffic` event).
+    pub traffic: Arc<crate::traffic::TrafficHub>,
 }
 
 impl AppState {
@@ -38,7 +40,13 @@ impl AppState {
             shutdown,
             store: None,
             meta_lock: Arc::new(tokio::sync::Mutex::new(())),
+            traffic: Arc::new(crate::traffic::TrafficHub::new(false)),
         }
+    }
+
+    pub fn with_traffic(mut self, traffic: Arc<crate::traffic::TrafficHub>) -> Self {
+        self.traffic = traffic;
+        self
     }
 
     pub fn with_store(mut self, store: Arc<Store>) -> Self {
@@ -52,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/devices", get(api::devices))
         .route("/api/status", get(api::status))
         .route("/api/events", get(api::events))
+        .route("/api/traffic", get(api::traffic))
         .route(
             "/api/devices/{id}/meta",
             put(api::put_meta)

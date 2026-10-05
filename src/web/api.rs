@@ -19,6 +19,11 @@ pub async fn devices(State(st): State<AppState>) -> Json<Vec<Device>> {
     Json(st.hub.snapshot().devices)
 }
 
+/// `GET /api/traffic`: the latest traffic sample.
+pub async fn traffic(State(st): State<AppState>) -> Json<crate::traffic::Sample> {
+    Json(st.traffic.latest())
+}
+
 pub async fn status(State(st): State<AppState>) -> Json<ScanStatus> {
     Json(st.hub.snapshot().status.unwrap_or_default())
 }
@@ -28,6 +33,10 @@ fn json_event(name: &str, value: &impl serde::Serialize) -> Event {
         .event(name)
         .json_data(value)
         .unwrap_or_else(|_| Event::default().comment("serialization error"))
+}
+
+fn traffic_event(s: &crate::traffic::Sample) -> Event {
+    json_event("traffic", s)
 }
 
 fn snapshot_event(hub: &Hub) -> Event {
@@ -57,8 +66,12 @@ pub async fn events(State(st): State<AppState>) -> impl axum::response::IntoResp
         Ok(ev) => live_event(&ev),
         Err(_lagged) => snapshot_event(&hub),
     });
+    // Traffic samples ride the same stream (about one per second; `GET /api/traffic`
+    // gives the latest immediately). A lagged receiver just skips ahead.
+    let traffic_live = BroadcastStream::new(st.traffic.subscribe())
+        .filter_map(|r| futures_util::future::ready(r.ok().map(|s| traffic_event(&s))));
     let s = stream::once(async move { first })
-        .chain(live)
+        .chain(stream::select(live, traffic_live))
         .take_until(st.shutdown.clone().cancelled_owned())
         .map(Ok::<_, Infallible>);
     Sse::new(s).keep_alive(KeepAlive::default())

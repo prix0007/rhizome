@@ -1,4 +1,10 @@
-//! ICMP sweep. Unprivileged `SOCK_DGRAM` ICMP first, `/sbin/ping` as fallback.
+//! ICMP sweep, per OS:
+//!
+//! * macOS and Linux: unprivileged `SOCK_DGRAM` ICMP first. On Linux that needs
+//!   `net.ipv4.ping_group_range` to include the user's group; when the socket
+//!   cannot be opened the system `ping` binary is used instead.
+//! * Windows: `ping.exe` under `%SystemRoot%\System32` (no elevation needed;
+//!   gives RTT and TTL). Raw sockets would need administrator rights.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
@@ -8,6 +14,12 @@ pub const EACCES: i32 = 13;
 pub const EHOSTUNREACH: i32 = 65;
 pub const EPROTONOSUPPORT: i32 = 43;
 pub const EAFNOSUPPORT: i32 = 47;
+// Linux numbers for the same conditions.
+pub const EPROTONOSUPPORT_LINUX: i32 = 93;
+pub const EAFNOSUPPORT_LINUX: i32 = 97;
+// Winsock equivalents.
+pub const WSAEACCES: i32 = 10013;
+pub const WSAEPROTONOSUPPORT: i32 = 10043;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -26,16 +38,26 @@ pub struct PingFailure {
 pub enum Verdict {
     /// macOS Local Network privacy is probably denying LAN traffic.
     LocalNetworkDenied,
-    /// Cannot open an unprivileged ICMP socket: use `/sbin/ping`.
+    /// Cannot open an unprivileged ICMP socket: use the system ping binary.
     FallbackToPingBinary,
     Ignore,
 }
 
 pub fn classify_failure(f: PingFailure) -> Verdict {
     match (f.phase, f.errno) {
-        (Phase::Socket, Some(EPERM | EACCES | EPROTONOSUPPORT | EAFNOSUPPORT)) => {
-            Verdict::FallbackToPingBinary
-        }
+        (
+            Phase::Socket,
+            Some(
+                EPERM
+                | EACCES
+                | EPROTONOSUPPORT
+                | EAFNOSUPPORT
+                | EPROTONOSUPPORT_LINUX
+                | EAFNOSUPPORT_LINUX
+                | WSAEACCES
+                | WSAEPROTONOSUPPORT,
+            ),
+        ) => Verdict::FallbackToPingBinary,
         (Phase::Send, Some(EHOSTUNREACH)) if f.target_is_gateway => Verdict::LocalNetworkDenied,
         _ => Verdict::Ignore,
     }
@@ -51,7 +73,7 @@ impl PingMethod {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::SurgeDgram => "icmp-dgram",
-            Self::PingBinary => "/sbin/ping",
+            Self::PingBinary => "ping-binary",
         }
     }
 }
@@ -63,6 +85,8 @@ pub struct SweepResult {
     /// of each answering host.
     pub replies: std::collections::BTreeMap<Ipv4Addr, PingReply>,
     pub failures: Vec<PingFailure>,
+    /// Set when the sweep could not run at all (e.g. no ping binary was found).
+    pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -149,6 +173,77 @@ mod tests {
     }
 
     #[test]
+    fn parses_replies_from_every_pings_output() {
+        let mac = "PING 192.168.0.1 (192.168.0.1): 56 data bytes\n64 bytes from 192.168.0.1: icmp_seq=0 ttl=64 time=3.123 ms\n\n--- 192.168.0.1 ping statistics ---\n";
+        assert_eq!(
+            parse_ping_output(mac),
+            Some(PingReply {
+                rtt_ms: 3.123,
+                ttl: Some(64)
+            })
+        );
+        let linux = "PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.\n64 bytes from 10.0.0.2: icmp_seq=1 ttl=63 time=0.345 ms\n";
+        assert_eq!(
+            parse_ping_output(linux),
+            Some(PingReply {
+                rtt_ms: 0.345,
+                ttl: Some(63)
+            })
+        );
+        let busybox = "64 bytes from 10.0.0.2: seq=0 ttl=64 time=0.5 ms\n";
+        assert_eq!(parse_ping_output(busybox).unwrap().ttl, Some(64));
+        let win = "\r\nPinging 192.168.0.1 with 32 bytes of data:\r\nReply from 192.168.0.1: bytes=32 time=3ms TTL=128\r\n";
+        assert_eq!(
+            parse_ping_output(win),
+            Some(PingReply {
+                rtt_ms: 3.0,
+                ttl: Some(128)
+            })
+        );
+        let fast = "Reply from 192.168.0.1: bytes=32 time<1ms TTL=64\r\n";
+        assert_eq!(
+            parse_ping_output(fast),
+            Some(PingReply {
+                rtt_ms: 0.5,
+                ttl: Some(64)
+            })
+        );
+    }
+
+    #[test]
+    fn localised_windows_output_still_parses() {
+        let de = "Antwort von 192.168.0.1: Bytes=32 Zeit=4ms TTL=64\r\n";
+        assert_eq!(
+            parse_ping_output(de),
+            Some(PingReply {
+                rtt_ms: 4.0,
+                ttl: Some(64)
+            })
+        );
+        let fr = "R\u{e9}ponse de 192.168.0.1\u{a0}: octets=32 temps<1ms TTL=128\r\n";
+        assert_eq!(parse_ping_output(fr).unwrap().ttl, Some(128));
+        let es = "Respuesta desde 192.168.0.1: bytes=32 tiempo=2ms TTL=64\r\n";
+        assert_eq!(parse_ping_output(es).unwrap().rtt_ms, 2.0);
+    }
+
+    #[test]
+    fn unreachable_and_timeout_output_is_not_a_reply() {
+        for out in [
+            "",
+            "Request timeout for icmp_seq 0\n",
+            "Reply from 192.168.0.5: Destination host unreachable.\r\n",
+            "From 10.0.0.1 icmp_seq=1 Destination Host Unreachable\n",
+            "Request timed out.\r\n",
+            "ping: sendto: No route to host\n",
+            "time=5 ms but no ttl\n",
+            "ttl=64 but no time\n",
+            "ttl=abc time=5 ms\n",
+        ] {
+            assert_eq!(parse_ping_output(out), None, "{out:?}");
+        }
+    }
+
+    #[test]
     fn ttl_maps_to_a_coarse_os_family() {
         for (ttl, want) in [
             (64, Some("Linux/Unix/macOS-like")),
@@ -209,6 +304,24 @@ mod tests {
     }
 
     #[test]
+    fn linux_and_windows_socket_failures_also_fall_back_to_the_ping_binary() {
+        for errno in [
+            EACCES,
+            EPERM,
+            EPROTONOSUPPORT_LINUX,
+            EAFNOSUPPORT_LINUX,
+            WSAEACCES,
+            WSAEPROTONOSUPPORT,
+        ] {
+            assert_eq!(
+                classify_failure(f(Phase::Socket, Some(errno), false)),
+                Verdict::FallbackToPingBinary,
+                "errno {errno}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_errors_are_ignored() {
         assert_eq!(
             classify_failure(f(Phase::Send, None, true)),
@@ -238,8 +351,58 @@ use surge_ping::{Client, Config, ICMP, PingIdentifier, PingSequence, SurgeError}
 
 use super::cmd::run_full;
 use crate::net::subnet::is_scan_target;
+use crate::platform::{Os, first_existing, ping_args, ping_candidates, system_root};
 
 pub const CONCURRENCY: usize = 64;
+
+/// Read one echo reply out of the system `ping` output, structurally so that
+/// localised Windows text still works: the reply line carries `ttl=<n>` (any
+/// case) and a time as `=<n>ms` or `<<n>ms`. A line without both (for example
+/// "Reply from x: Destination host unreachable.") is not a reply. `time<1ms`
+/// is reported as 0.5 ms.
+pub fn parse_ping_output(out: &str) -> Option<PingReply> {
+    for line in out.lines() {
+        let lower = line.to_lowercase();
+        let Some(at) = lower.find("ttl=") else {
+            continue;
+        };
+        let digits: String = lower[at + 4..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let Ok(ttl) = digits.parse::<u8>() else {
+            continue;
+        };
+        if let Some(rtt_ms) = find_time_ms(&lower) {
+            return Some(PingReply {
+                rtt_ms,
+                ttl: Some(ttl),
+            });
+        }
+    }
+    None
+}
+
+/// The first `=<n>ms` / `<<n>ms` (optionally with spaces) in a line.
+fn find_time_ms(line: &str) -> Option<f64> {
+    for (i, c) in line.char_indices() {
+        if c != '=' && c != '<' {
+            continue;
+        }
+        let rest = line[i + 1..].trim_start();
+        let num: String = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect();
+        let after = rest[num.len()..].trim_start();
+        if after.starts_with("ms")
+            && let Ok(v) = num.parse::<f64>()
+        {
+            return Some(if c == '<' { v * 0.5 } else { v });
+        }
+    }
+    None
+}
 
 /// Map a failed `/sbin/ping` run to a failure the classifier understands:
 /// "No route to host" is macOS's Local Network denial signature.
@@ -330,12 +493,25 @@ pub async fn sweep_dgram(
     Ok(out)
 }
 
-/// Fallback: `/sbin/ping -c1 -W 500 -q <ip>` (absolute path, no shell, typed address).
+/// The system `ping` binary, one process per host (absolute path from a fixed
+/// list, no shell, minimal environment, typed address). Gives RTT and, because it
+/// prints the reply line, the TTL as well.
 pub async fn sweep_binary(
     net: Ipv4Net,
     targets: &[Ipv4Addr],
     gateway: Option<Ipv4Addr>,
 ) -> SweepResult {
+    let os = Os::current();
+    let Some(exe) = first_existing(&ping_candidates(os, &system_root())) else {
+        return SweepResult {
+            unavailable: Some(format!(
+                "no ping program found in the standard locations on {}; host discovery by ping is unavailable",
+                os.name()
+            )),
+            ..SweepResult::default()
+        };
+    };
+    let exe = &exe;
     let results: Vec<(Ipv4Addr, Option<PingReply>, Option<PingFailure>)> =
         futures_util::stream::iter(
             targets
@@ -344,32 +520,20 @@ pub async fn sweep_binary(
                 .filter(|ip| is_scan_target(*ip, net)),
         )
         .map(|ip| async move {
-            let args = [
-                "-c".to_string(),
-                "1".into(),
-                "-W".into(),
-                "500".into(),
-                "-q".into(),
-                ip.to_string(),
-            ];
-            match run_full("/sbin/ping", &args, Duration::from_secs(3)).await {
-                Ok(o) if o.success => {
-                    // `ping -q` prints the round-trip summary; the TTL is not shown without -v.
-                    let rtt = parse_ping_rtt(&String::from_utf8_lossy(&o.stdout));
-                    (
-                        ip,
-                        Some(PingReply {
-                            rtt_ms: rtt.unwrap_or(0.0),
-                            ttl: None,
-                        }),
-                        None,
-                    )
+            let args = ping_args(os, ip, 500);
+            match run_full(exe, &args, Duration::from_secs(3)).await {
+                Ok(o) => {
+                    // A reply is recognised by its content, not the exit status:
+                    // ping.exe exits 0 even for "Destination host unreachable".
+                    match parse_ping_output(&String::from_utf8_lossy(&o.stdout)) {
+                        Some(r) => (ip, Some(r), None),
+                        None => (
+                            ip,
+                            None,
+                            binary_failure(ip, gateway, &String::from_utf8_lossy(&o.stderr)),
+                        ),
+                    }
                 }
-                Ok(o) => (
-                    ip,
-                    None,
-                    binary_failure(ip, gateway, &String::from_utf8_lossy(&o.stderr)),
-                ),
                 Err(_) => (ip, None, None),
             }
         })

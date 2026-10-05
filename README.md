@@ -22,6 +22,11 @@ telemetry, no outbound internet traffic.
 - **Name your devices.** Give any device a custom name and notes; they are saved and survive restarts.
 - **Remembers:** history in a local SQLite file, so offline devices keep their "last seen" and new
   arrivals are highlighted. History is kept per network.
+- **Live traffic and link quality.** Host throughput, link speed and Wi-Fi signal, the router's WAN
+  throughput (where it offers it), per-device packet loss and jitter, and, if you opt in, packet-flow
+  summaries between this machine and each device. See [Traffic](#traffic-and-link-quality).
+- **macOS, Linux and Windows** builds (see [Platform support](#platform-support) for what has been
+  tested where).
 - **Private by design:** the page is served on `127.0.0.1` only, and everything Rhizome sends stays
   on your subnet (see [Security model](#security-model)).
 
@@ -44,13 +49,44 @@ Useful flags (`cargo run -- --help` for all of them):
 | `--no-tcp-probe` | off | Skip the TCP probe of silent hosts |
 | `--no-netbios` | off | Do not send NetBIOS node-status queries (UDP 137) to hosts |
 | `--no-dns` | off | Do not send reverse-DNS (PTR) queries to the gateway |
-| `--no-upnp` | off | Do not fetch UPnP device descriptions from hosts |
+| `--no-upnp` | off | Do not fetch UPnP device descriptions from hosts (this also turns off the router's WAN counters) |
+| `--capture` | off | Summarise packet flows on the scanned interface (needs read access to the capture device, see [Traffic](#traffic-and-link-quality)) |
 | `--max-hosts` | 1024 | Cap on hosts pinged per scan (nearest the gateway first) |
 
 Press Ctrl-C to stop; the scanner and the event streams shut down cleanly and the
 database is left intact.
 
 Only scan networks you are allowed to scan.
+
+## Platform support
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Builds and passes unit tests | yes (developed and tested here) | yes, in CI | yes, in CI |
+| **Run against a real network by us** | **yes** | **not yet** | **not yet** |
+| Neighbour table | `arp -an` | `/proc/net/arp` | `arp -a` |
+| Ping sweep | unprivileged ICMP socket | unprivileged ICMP socket, else the system `ping` | `ping.exe` |
+| Reply TTL / `os_hint` | yes (from the socket) | only when the `ping` binary is used (the kernel strips the header from datagram ICMP) | yes (`ping.exe`) |
+| Local Network hint | yes (macOS only) | n/a | n/a |
+| Link info | Wi-Fi: rate, signal, noise, channel, PHY; Ethernet: speed | Ethernet speed; Wi-Fi signal and noise (no rate) | Wi-Fi via `netsh` (English only); adapter speed |
+| Packet capture (`--capture`) | via `tcpdump` | via `tcpdump` | not available |
+| Data directory | `~/Library/Application Support/rhizome` | `~/.local/share/rhizome` | `%APPDATA%\rhizome\data` |
+
+Linux and Windows are written against fixtures and format documentation and are type-checked and
+unit-tested on all three systems in CI, but **nobody has run them against a real Linux or Windows
+network yet**. Expect rough edges, and please report them. Per-OS notes:
+
+- **Linux:** unprivileged ICMP needs your group in `net.ipv4.ping_group_range`
+  (for example `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`). Without it Rhizome falls back to
+  the system `ping`, which is slower and says so in the status bar. Capture needs `tcpdump` and the
+  capability described below.
+- **Windows:** the first run may trigger a firewall prompt for network access; allow private networks.
+  Rhizome never needs administrator rights. There is no packet capture on Windows (it would need the
+  Npcap driver, which is not bundled). Database files rely on the per-user profile's access rules
+  rather than Unix modes.
+- **macOS:** see the Local Network note below.
+- **Executables** (`arp`, `ping`, `tcpdump`, `netsh`, ...) are only ever taken from fixed absolute paths,
+  never searched for through `PATH`.
 
 ## What Rhizome collects, and how
 
@@ -105,6 +141,45 @@ curl -X PUT http://127.0.0.1:7878/api/devices/02%3A21%3A49%3Ab8%3A2c%3A62/meta \
   otherwise it is refused with 403. Unknown ids get 404, malformed bodies 400, bodies over 4 KB 413.
 - The response is the updated device. The change is pushed to every open page and saved in SQLite
   per network, so it survives restarts.
+
+## Traffic and link quality
+
+Rhizome publishes one measurement sample per second (`GET /api/traffic`, and as a `traffic` event on the
+`/api/events` stream). Everything in it may be `null` when a source is unavailable.
+
+**Always on, no extra privileges:**
+
+| Measurement | Source | Notes |
+|---|---|---|
+| Host download/upload rate | the selected interface's byte counters | macOS counters are 32-bit and wrap every few minutes at load; the rate maths handles wrap and resets |
+| Link: kind, rate, signal, noise, channel, PHY | macOS: `networksetup`, `ifconfig` media line, and `system_profiler` for Wi-Fi; Linux: sysfs and `/proc/net/wireless`; Windows: `netsh wlan` | `system_profiler` takes several seconds, so Wi-Fi details are read slowly (about once a minute) in the background and never delay a sample. macOS shows no network *name* without Location permission; Rhizome does not need or use it |
+| WAN download/upload rate | the router's UPnP IGD counters (`GetTotalBytesReceived/Sent`) | Only if the router implements them and `--no-upnp` is not set. Many routers answer but report 0 forever (the one tested here does); Rhizome then reports `wan: null` rather than a misleading 0 |
+| Per-device packet loss and jitter | the scan cycle's own ping sweep | One sample per device per scan, over a window of the last 20 scans; shown only once there are at least 3 samples. This is slow-moving link quality, not a live stream: with a 30-second interval the window spans ten minutes |
+
+**What is and is not visible, and why.** On a normal (switched) network this machine only ever sees its own traffic
+plus broadcast and multicast. Rhizome therefore cannot measure traffic *between two other devices*, or what each
+device does on the internet, and it does not try (no ARP spoofing, no monitor mode, nothing that redirects other
+devices' traffic). Per-device throughput exists only for the traffic *between this machine and that device*, and only
+with capture on.
+
+**Packet capture (`--capture`, off by default).** Summarises per-second flows between this machine and LAN devices, plus
+broadcast and multicast chatter attributed to its sender (ARP, mDNS, SSDP, TCP, UDP, ICMP). It runs the system `tcpdump`
+on the scanned interface (headers only, not promiscuous) and parses its one-line summaries; no native capture library is
+linked, so it does not affect the build for any platform.
+
+- **Privacy rules.** Payloads are never read or stored: only counts by sender, receiver and protocol class survive.
+  Remote (off-subnet) hosts are never recorded: all traffic to or from the internet becomes a single anonymous
+  `other` flow on this machine's own node, and is not attributed to the gateway or any device (that would be browsing
+  history). The flow list is capped at 64 entries per sample.
+- **Permissions.** Capture needs read access to the capture device. Rhizome never asks for, runs as, or escalates to root,
+  and never runs `sudo`; when capture cannot start it keeps running everything else, and `capture.available` is `false`
+  with a `reason` that says what to do. The narrow grants:
+  - **macOS:** read access to `/dev/bpf*` for your user. The usual way is Wireshark's ChmodBPF helper, which creates an
+    `access_bpf` group; add your user to it and restart Rhizome. (Without this, as on the development machine, capture
+    reports it is unavailable and tier 1 carries on.)
+  - **Linux:** give `tcpdump` (not Rhizome) the capability: `sudo setcap cap_net_raw,cap_net_admin=eip $(which tcpdump)`, or add
+    your user to the group your distribution uses for capture (often `pcap` or `wireshark`).
+  - **Windows:** not available.
 
 ## macOS "Local Network" permission
 
@@ -165,14 +240,27 @@ so it is defensive in both directions.
   were asked and echo the transaction id, and `--no-netbios` turns the source off entirely.
 - **The three optional sources** (`--no-upnp`, `--no-dns`, `--no-netbios`) are independent; with all three set,
   Rhizome sends nothing beyond the base scan (ping, ARP, mDNS and SSDP).
-- **Subprocesses.** Only `/usr/sbin/arp` and (as a fallback) `/sbin/ping`, by absolute path with
-  no shell, a cleared environment, a timeout and a 1 MB output cap. Arguments are fixed or a typed
-  IPv4 address that passed the scan-target check.
+- **Subprocesses.** Only a short fixed list (`arp`, `ping`, plus `networksetup`, `ifconfig`, `system_profiler`
+  on macOS, `netsh` on Windows, and `tcpdump` with `--capture`), each from a fixed absolute path (never looked up
+  through `PATH`), with no shell, a minimal environment, a timeout and capped output. Arguments are fixed or a typed
+  IPv4 address that passed the scan-target check; the interface name handed to `tcpdump` is validated so it can never
+  be read as an option.
 - **Network scope.** Every probe target (ICMP, TCP, UPnP, NetBIOS) must be a private, in-subnet unicast
-  host. The only other destinations are the mDNS and SSDP multicast groups and the gateway's DNS port.
-  Nothing is sent to the internet.
-- **SQL and files.** Parameterised statements only. The database directory is created 0700 and the
-  file is 0600. Nothing is written outside the application support directory.
+  host. The only other destinations are the mDNS and SSDP multicast groups, the gateway's DNS port, and (for the WAN
+  counters) the router's own UPnP control endpoint. Nothing is sent to the internet.
+- **The WAN counter request is the second HTTP request chosen by a LAN device,** so it follows the same rules as the
+  description fetch: plain `http://` to the router's own in-subnet IPv4 (the control URL must resolve to the very
+  address the description came from, with its query and fragment dropped), a hand-written `HTTP/1.0` POST with fixed
+  actions, no redirects, 2 s connect and 3 s total timeouts, a capped response, strict XML (DOCTYPE rejected), and
+  a poll every 3 seconds that stops after repeated failures or when the router only ever reports zero. `--no-upnp`
+  disables it.
+- **Capture mode (`--capture`).** Off by default. It reads headers only (`-s 96`), non-promiscuously, from the system
+  `tcpdump`, keeps only counts by sender, receiver and protocol class, never stores or exposes payloads, and folds all
+  off-subnet traffic into one anonymous bucket (see [Traffic](#traffic-and-link-quality)). Rhizome does not escalate
+  privileges; the OS grant applies to `tcpdump`.
+- **SQL and files.** Parameterised statements only. On Unix the database directory is created 0700 and the
+  file is 0600; on Windows no mode bits exist, so the per-user profile directory's own access rules apply (nothing
+  pretends otherwise). Nothing is written outside the application data directory.
 - **Bounded LAN input.** At most 64 mDNS service types are browsed (names are validated first),
   the mDNS cache holds 1024 entries, SSDP keeps at most 512 observations per scan (32 per source),
   at most 64 DNS and 64 NetBIOS lookups are sent per scan, mDNS and SSDP data from addresses outside
@@ -223,6 +311,14 @@ so it is defensive in both directions.
   stored in SQLite and shown for offline devices. Only one `LOCATION` per host is used.
 - Learned names and models are remembered even if the device is later replaced by a different one
   at the same MAC; custom names and notes are last-write-wins with no history or undo.
+
+- **Linux and Windows have not been run against a real network by us** (see Platform support); parsers are tested
+  against fixtures of the documented formats, including a German-localised Windows `arp -a`.
+- **Traffic:** per-device loss and jitter come from one ping per scan, so they describe the last few minutes, not the
+  last second. Host throughput on macOS is derived from 32-bit counters (wrap-corrected at a one-second cadence).
+  Router WAN counters are unavailable on many routers. Wi-Fi signal on Windows is the OS's percentage converted with the
+  common `dBm = pct/2 - 100` approximation, and the Windows Wi-Fi source reads English `netsh` labels only. Without
+  capture there is no per-device throughput at all, and with capture only traffic to or from this machine is seen.
 
 ## License
 

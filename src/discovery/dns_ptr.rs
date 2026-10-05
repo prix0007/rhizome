@@ -216,7 +216,12 @@ pub async fn lookup_ptrs(
         let Ok(r) = tokio::time::timeout_at(deadline, sock.recv(&mut buf)).await else {
             break;
         };
-        let Ok(n) = r else { break };
+        let n = match r {
+            Ok(n) => n,
+            // Windows: an earlier ICMP port-unreachable surfaces as ConnectionReset.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+            Err(_) => break,
+        };
         if n < 2 {
             continue;
         }

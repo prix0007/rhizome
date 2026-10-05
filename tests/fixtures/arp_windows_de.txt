@@ -1,0 +1,6 @@
+
+Schnittstelle: 192.168.0.172 --- 0x7
+  Internetadresse       Physische Adresse     Typ
+  192.168.0.1           68-7f-f0-00-00-01     dynamisch
+  192.168.0.82          02-21-49-00-00-82     dynamisch
+  224.0.0.22            01-00-5e-00-00-16     statisch

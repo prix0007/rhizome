@@ -1,15 +1,17 @@
-//! Run an absolute-path subprocess with no shell, a cleared environment,
-//! a timeout and a capped stdout.
+//! Run an absolute-path subprocess with no shell, a minimal environment, a
+//! timeout and capped output. Works the same on macOS, Linux and Windows.
 
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::platform::{Os, minimal_env, system_root};
+
 pub const MAX_OUTPUT: u64 = 1024 * 1024;
 const MAX_ERR_OUTPUT: u64 = 64 * 1024;
-const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CmdError {
@@ -31,27 +33,32 @@ pub struct CmdOutput {
     pub stderr: Vec<u8>,
 }
 
-/// Like `run_capped` but also returns (capped) stderr.
+/// Run `program` (an absolute path, never looked up through `PATH`) with
+/// `args`, a minimal environment, no stdin, and capped stdout/stderr.
 pub async fn run_full(
-    program: &'static str,
+    program: impl AsRef<Path>,
     args: &[String],
     timeout: Duration,
 ) -> Result<CmdOutput, CmdError> {
+    let program = program.as_ref();
+    let name = program.display().to_string();
     debug_assert!(
-        program.starts_with('/'),
+        program.is_absolute(),
         "subprocesses must use absolute paths"
     );
-    let mut child = Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", SAFE_PATH)
+    let mut cmd = Command::new(program);
+    cmd.args(args).env_clear();
+    for (k, v) in minimal_env(Os::current(), &system_root()) {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| CmdError::Spawn(program.into(), e))?;
-    let mut stdout = child
+        .map_err(|e| CmdError::Spawn(name.clone(), e))?;
+    let stdout = child
         .stdout
         .take()
         .expect("stdout is piped")
@@ -63,11 +70,19 @@ pub async fn run_full(
         .take(MAX_ERR_OUTPUT);
     let work = async {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        // Read both pipes together so a full stderr cannot block stdout.
-        let (a, b) = tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err));
+        // Read both pipes together so a full stderr cannot block stdout. The
+        // stdout reader is dropped the moment it is done (or capped), which
+        // gives a chatty child SIGPIPE so stderr then reaches EOF too.
+        let out_fut = async {
+            let mut so = stdout;
+            let r = so.read_to_end(&mut out).await;
+            drop(so);
+            r
+        };
+        let err_fut = stderr.read_to_end(&mut err);
+        let (a, b) = tokio::join!(out_fut, err_fut);
         a?;
         b?;
-        drop((stdout, stderr));
         let status = child.wait().await?;
         Ok::<_, std::io::Error>(CmdOutput {
             success: status.success(),
@@ -76,53 +91,24 @@ pub async fn run_full(
         })
     };
     match tokio::time::timeout(timeout, work).await {
-        Err(_) => Err(CmdError::Timeout(program.into())),
-        Ok(Err(e)) => Err(CmdError::Read(program.into(), e)),
+        Err(_) => Err(CmdError::Timeout(name)),
+        Ok(Err(e)) => Err(CmdError::Read(name, e)),
         Ok(Ok(r)) => Ok(r),
     }
 }
 
 /// Returns (exit success, stdout bytes capped at `MAX_OUTPUT`).
 pub async fn run_capped(
-    program: &'static str,
+    program: impl AsRef<Path>,
     args: &[String],
     timeout: Duration,
 ) -> Result<(bool, Vec<u8>), CmdError> {
-    debug_assert!(
-        program.starts_with('/'),
-        "subprocesses must use absolute paths"
-    );
-    let mut child = Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", SAFE_PATH)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| CmdError::Spawn(program.into(), e))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .expect("stdout is piped")
-        .take(MAX_OUTPUT);
-    let work = async {
-        let mut buf = Vec::new();
-        stdout.read_to_end(&mut buf).await?;
-        // Close our end so a chatty child gets SIGPIPE instead of blocking forever.
-        drop(stdout);
-        let status = child.wait().await?;
-        Ok::<_, std::io::Error>((status.success(), buf))
-    };
-    match tokio::time::timeout(timeout, work).await {
-        Err(_) => Err(CmdError::Timeout(program.into())),
-        Ok(Err(e)) => Err(CmdError::Read(program.into(), e)),
-        Ok(Ok(r)) => Ok(r),
-    }
+    let o = run_full(program, args, timeout).await?;
+    Ok((o.success, o.stdout))
 }
 
-#[cfg(test)]
+// These tests run tiny Unix utilities by absolute path.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

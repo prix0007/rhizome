@@ -26,9 +26,12 @@ use crate::model::{
 };
 use crate::net::iface_select::Selected;
 use crate::net::subnet::enumerate_targets;
+use crate::platform::{Os, dgram_icmp_supported};
 use crate::state::hub::Hub;
 use crate::state::merge::{MergeCtx, ScanInputs, diff, merge, network_id};
 use crate::store::Store;
+use crate::traffic::TrafficHub;
+use crate::traffic::quality::QualityBook;
 
 /// Raw observations from the I/O adapters for one cycle.
 #[derive(Clone, Debug)]
@@ -107,6 +110,9 @@ pub struct Scanner {
     /// The interface of the last successful collect, so a failed one can still age devices.
     last_selected: Option<Selected>,
     clock: Clock,
+    /// Where per-device loss/jitter and the scanned interface are published.
+    traffic: Option<Arc<TrafficHub>>,
+    quality: QualityBook,
 }
 
 impl Scanner {
@@ -121,12 +127,45 @@ impl Scanner {
             baseline_at: None,
             last_selected: None,
             clock: Box::new(now_ms),
+            traffic: None,
+            quality: QualityBook::default(),
         }
     }
 
     pub fn with_store(mut self, store: Arc<Store>) -> Self {
         self.store = Some(store);
         self
+    }
+
+    /// Publish the scanned interface and per-device loss/jitter to `traffic`.
+    pub fn with_traffic(mut self, traffic: Arc<TrafficHub>) -> Self {
+        self.traffic = Some(traffic);
+        self
+    }
+
+    /// Record this cycle's ping outcome for every device that was in the ARP
+    /// table (or answered): an RTT for a reply, `None` for silence. No second
+    /// ping loop: the sweep that discovered the devices is the measurement.
+    fn record_quality(
+        &mut self,
+        sel: &Selected,
+        pinged: bool,
+        arp_macs: &BTreeSet<MacAddr>,
+        rtt_by_ip: &BTreeMap<Ipv4Addr, f64>,
+    ) {
+        let Some(t) = &self.traffic else { return };
+        t.set_selected(sel.clone());
+        if pinged {
+            for (id, d) in self.prev.iter().filter(|(_, d)| !d.is_self) {
+                let rtt = rtt_by_ip.get(&d.ip).copied();
+                if rtt.is_some() || arp_macs.contains(&d.mac) {
+                    self.quality.record(id, rtt);
+                }
+            }
+            let prev = &self.prev;
+            self.quality.retain_only(&|id| prev.contains_key(id));
+        }
+        t.set_quality(self.quality.snapshot());
     }
 
     /// Replace the wall clock used for `scan_finished_at` (tests).
@@ -326,6 +365,13 @@ impl Scanner {
         }
         self.last_selected = Some(sel.clone());
 
+        let pinged = !collected.ping_method.is_empty();
+        let rtt_by_ip: BTreeMap<Ipv4Addr, f64> = collected
+            .host_info
+            .iter()
+            .filter_map(|(ip, h)| h.rtt_ms.map(|r| (*ip, r)))
+            .collect();
+        let arp_macs: BTreeSet<MacAddr> = collected.arp.iter().filter_map(|e| e.mac).collect();
         let mut inputs = ScanInputs::new(sel.clone(), now);
         inputs.arp = collected.arp;
         inputs.ping_alive = collected.ping_alive;
@@ -337,6 +383,7 @@ impl Scanner {
         let (next, _) = merge(&self.prev, &inputs, &self.merge_ctx(now));
         self.prev = next;
         self.overlay_user_meta();
+        self.record_quality(&sel, pinged, &arp_macs, &rtt_by_ip);
         let events = self.events_vs_hub();
 
         let mut warnings = collected.warnings;
@@ -416,6 +463,8 @@ pub struct LiveOptions {
     pub netbios: bool,
     pub dns: bool,
     pub upnp: bool,
+    /// Where to leave the router's WAN counter endpoint for the traffic poller.
+    pub igd: Option<Arc<crate::traffic::IgdSlot>>,
     /// mDNS entries seen within this window count as liveness; older ones only enrich.
     pub fresh_window: Duration,
 }
@@ -444,8 +493,9 @@ impl LiveCollector {
                 upnp: opts.upnp,
                 dns: opts.dns,
                 netbios: opts.netbios,
-            }),
-            use_ping_binary: AtomicBool::new(false),
+            })
+            .with_igd(opts.igd),
+            use_ping_binary: AtomicBool::new(!dgram_icmp_supported(Os::current())),
             mdns: Keyed::new(),
         }
     }
@@ -454,7 +504,7 @@ impl LiveCollector {
     /// interface changes. Must run inside the tokio runtime.
     fn mdns_for(&self, sel: &Selected) -> Result<Arc<dyn MdnsSource>, String> {
         self.mdns.get_or_start(&sel.name, || {
-            MdnsService::start(&sel.name, sel.net).map(|s| Arc::new(s) as Arc<dyn MdnsSource>)
+            MdnsService::start(sel.ip, sel.net).map(|s| Arc::new(s) as Arc<dyn MdnsSource>)
         })
     }
 }
@@ -464,7 +514,7 @@ impl Collector for LiveCollector {
         Box::pin(async move {
             let (selected, _) =
                 crate::net::iface::select_with_locals_now(self.iface_override.as_deref()).ok()?;
-            let arp = crate::discovery::arp::read_arp(&selected.name).await.ok()?;
+            let arp = crate::discovery::arp::read_arp(&selected).await.ok()?;
             // Start listening early so the first cycle already has answers.
             let _ = self.mdns_for(&selected);
             Some((selected, arp))
@@ -503,10 +553,14 @@ impl Collector for LiveCollector {
                     Err(f) => {
                         if classify_failure(f) == Verdict::FallbackToPingBinary {
                             tracing::warn!(
-                                "unprivileged ICMP socket unavailable (errno {:?}); falling back to /sbin/ping",
+                                "unprivileged ICMP socket unavailable (errno {:?}); using the system ping binary",
                                 f.errno
                             );
                             self.use_ping_binary.store(true, Ordering::Relaxed);
+                            warnings.push(match Os::current() {
+                                Os::Linux => "Unprivileged ICMP sockets are not permitted here (see net.ipv4.ping_group_range); using the system ping binary instead, which is slower. Allow your group with: sysctl net.ipv4.ping_group_range=\"0 2147483647\"".to_string(),
+                                os => format!("Unprivileged ICMP sockets are unavailable on {}; using the system ping binary instead, which is slower.", os.name()),
+                            });
                         }
                         method = PingMethod::PingBinary;
                         sweep_binary(selected.net, &targets, selected.gateway_ip).await
@@ -515,16 +569,22 @@ impl Collector for LiveCollector {
             } else {
                 sweep_binary(selected.net, &targets, selected.gateway_ip).await
             };
-            if sweep
-                .failures
-                .iter()
-                .any(|f| classify_failure(*f) == Verdict::LocalNetworkDenied)
+            if let Some(why) = &sweep.unavailable {
+                tracing::warn!("{why}");
+                warnings.push(why.clone());
+            }
+            // The Local Network privacy prompt exists on macOS only.
+            if Os::current() == Os::Mac
+                && sweep
+                    .failures
+                    .iter()
+                    .any(|f| classify_failure(*f) == Verdict::LocalNetworkDenied)
             {
                 tracing::warn!("{LOCAL_NETWORK_HINT}");
                 warnings.push(LOCAL_NETWORK_HINT.to_string());
             }
 
-            let arp = match crate::discovery::arp::read_arp(&selected.name).await {
+            let arp = match crate::discovery::arp::read_arp(&selected).await {
                 Ok(a) => a,
                 Err(e) => {
                     warnings.push(format!("arp: {e}"));

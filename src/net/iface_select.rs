@@ -54,8 +54,74 @@ fn usable(i: &IfaceInfo) -> Option<(Ipv4Net, MacAddr)> {
     (i.is_up && !i.is_loopback && net.addr().is_private() && !mac.is_zero()).then_some((net, mac))
 }
 
+/// Whether an interface name looks like a physical LAN adapter on any OS:
+/// macOS `en0`, Linux `eth0` / `enp3s0` / `eno1` / `wlan0` / `wlp2s0`, and the
+/// Windows friendly names `Ethernet`, `Ethernet 2`, `Wi-Fi`. Virtual, tunnel,
+/// bridge, container and VM adapters are rejected first, whatever else the
+/// name contains.
+pub fn is_lan_nic_name(name: &str) -> bool {
+    const REJECT_PREFIX: &[&str] = &[
+        "utun",
+        "awdl",
+        "llw",
+        "bridge",
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "vboxnet",
+        "vmnet",
+        "tun",
+        "tap",
+        "wg",
+        "gif",
+        "stf",
+        "ap",
+        "anpi",
+        "vethernet",
+        "isatap",
+        "teredo",
+        "ppp",
+    ];
+    const REJECT_CONTAINS: &[&str] = &[
+        "loopback",
+        "virtual",
+        "vmware",
+        "hyper-v",
+        "bluetooth",
+        "vpn",
+        "tunnel",
+        "wsl",
+        "pseudo",
+    ];
+    const ACCEPT_PREFIX: &[&str] = &["en", "eth", "wl", "ww"];
+    const ACCEPT_CONTAINS: &[&str] = &[
+        "wi-fi",
+        "wifi",
+        "wlan",
+        "wireless",
+        "ethernet",
+        "local area connection",
+    ];
+    let lower = name.to_lowercase();
+    // loopback: `lo`, `lo0` (but not e.g. "Local Area Connection")
+    if lower
+        .strip_prefix("lo")
+        .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+    {
+        return false;
+    }
+    if REJECT_PREFIX.iter().any(|p| lower.starts_with(p))
+        || REJECT_CONTAINS.iter().any(|c| lower.contains(c))
+    {
+        return false;
+    }
+    ACCEPT_PREFIX.iter().any(|p| lower.starts_with(p))
+        || ACCEPT_CONTAINS.iter().any(|c| lower.contains(c))
+}
+
 fn is_lan_candidate(i: &IfaceInfo) -> bool {
-    i.name.starts_with("en") && !i.is_point_to_point
+    is_lan_nic_name(&i.name) && !i.is_point_to_point
 }
 
 /// MACs of this machine's interfaces that are up with an address on `net`.
@@ -298,5 +364,80 @@ mod tests {
             select_with_locals(&[], None, None),
             Err(SelectError::NoCandidate)
         );
+    }
+
+    #[test]
+    fn lan_adapter_names_on_every_os() {
+        for ok in [
+            "en0",
+            "en8",
+            "eth0",
+            "eth1",
+            "enp3s0",
+            "eno1",
+            "ens160",
+            "wlan0",
+            "wlp2s0",
+            "wwan0",
+            "Wi-Fi",
+            "Wi-Fi 2",
+            "WiFi",
+            "Ethernet",
+            "Ethernet 3",
+            "Local Area Connection",
+            "WLAN",
+        ] {
+            assert!(is_lan_nic_name(ok), "{ok} should be a candidate");
+        }
+        for bad in [
+            "lo",
+            "lo0",
+            "utun3",
+            "awdl0",
+            "llw0",
+            "bridge100",
+            "docker0",
+            "veth12ab",
+            "br-1a2b3c",
+            "virbr0",
+            "tun0",
+            "tap0",
+            "wg0",
+            "ap1",
+            "anpi0",
+            "ppp0",
+            "vEthernet (Default Switch)",
+            "vEthernet (WSL)",
+            "Loopback Pseudo-Interface 1",
+            "Bluetooth Network Connection",
+            "VMware Network Adapter VMnet8",
+            "VirtualBox Host-Only Network",
+            "Teredo Tunneling Pseudo-Interface",
+            "OpenVPN TAP-Windows6",
+        ] {
+            assert!(!is_lan_nic_name(bad), "{bad} must not be a candidate");
+        }
+    }
+
+    #[test]
+    fn a_linux_or_windows_machine_selects_its_nic_by_name_too() {
+        let linux = iface("enp3s0", "192.168.1.20", 24, Some("0:1:2:3:4:5"));
+        let docker = iface("docker0", "172.17.0.1", 16, Some("0:1:2:3:4:6"));
+        let s = select_interface(
+            &[docker, linux],
+            Some(&route("enp3s0", "192.168.1.1")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.name, "enp3s0");
+        let wifi = iface("Wi-Fi", "192.168.1.30", 24, Some("0:1:2:3:4:7"));
+        let hyperv = iface(
+            "vEthernet (Default Switch)",
+            "172.20.0.1",
+            20,
+            Some("0:1:2:3:4:8"),
+        );
+        let s = select_interface(&[hyperv, wifi], None, None).unwrap();
+        assert_eq!(s.name, "Wi-Fi");
     }
 }

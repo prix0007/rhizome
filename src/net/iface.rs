@@ -12,7 +12,13 @@ pub fn list_ifaces() -> Vec<IfaceInfo> {
             is_point_to_point: i.is_point_to_point(),
             ipv4: i.ipv4.first().copied(),
             mac: i.mac_addr.map(|m| MacAddr(m.octets())),
-            name: i.name,
+            // Windows names adapters by GUID; the friendly name ("Ethernet", "Wi-Fi") is
+            // what users and the selection rule recognise.
+            name: if cfg!(windows) {
+                i.friendly_name.clone().unwrap_or(i.name)
+            } else {
+                i.name
+            },
         })
         .collect()
 }

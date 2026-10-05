@@ -47,28 +47,60 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+/// Owner-only access for a directory we created. Unix: mode 0700. Windows has
+/// no mode bits: a directory under the per-user profile (`%APPDATA%`) is already
+/// restricted by its inherited ACL to the user, SYSTEM and administrators, so
+/// nothing is changed there (and nothing pretends otherwise).
+#[cfg(unix)]
+fn restrict_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Create the file if missing; on Unix it is mode 0600 and an existing looser
+/// file is tightened.
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    Ok(())
+}
+
 impl Store {
     /// Open (creating if needed) the database at `path`. A directory created
     /// here is 0700 and the file is always 0600; pre-existing parent
     /// directories are left untouched.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
         if let Some(parent) = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty() && !p.exists())
         {
             std::fs::create_dir_all(parent)?;
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            restrict_dir(parent)?;
         }
-        // Create the file ourselves so it never exists with a wider mode.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        // Create the file ourselves (0600 from the start on Unix) so it never
+        // exists with a wider mode.
+        create_private_file(path)?;
         let store = Self {
             conn: Mutex::new(Connection::open(path)?),
         };
