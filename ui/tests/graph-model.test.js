@@ -219,7 +219,7 @@ test('label: long machine hostnames lose the hex tail and .local; long text is e
   assert.equal(labelText(dev('a', { hostname: 'Android_0123456789abcdef0123456789abcdef' })), 'Android');
   assert.equal(labelText(dev('a', { hostname: 'macbook.local' })), 'macbook');
   const long = labelText(dev('a', { hostname: 'a-very-long-human-hostname-indeed-yes' }));
-  assert.ok([...long].length <= 22);
+  assert.ok([...long].length <= 24);
   assert.ok(long.endsWith('\u2026'));
 });
 
@@ -238,9 +238,9 @@ test('label: secondary line carries the IP, or "private MAC" when the IP is the 
 
 test('nodeStyle uses the legend colours and fades offline devices', () => {
   assert.equal(nodeStyle(dev('g', { is_gateway: true })).color, '#ffc247');
-  assert.equal(nodeStyle(dev('s', { is_self: true })).color, '#3ddcff');
+  assert.equal(nodeStyle(dev('s', { is_self: true })).color, '#5ab0ff');
   assert.equal(nodeStyle(dev('n', { is_new: true })).color, '#ff7a3d');
-  assert.equal(nodeStyle(dev('o')).color, '#6ee7a8');
+  assert.equal(nodeStyle(dev('o')).color, '#5fe08a');
   const off = nodeStyle(dev('x', { online: false }));
   assert.ok(off.opacity < 0.5 && off.glow === 0);
   const hexes = [dev('g', { is_gateway: true }), dev('s', { is_self: true }), dev('n', { is_new: true }), dev('o'), dev('x', { online: false })].map((d) => nodeStyle(d).color);
@@ -338,4 +338,140 @@ test('hashAngle is stable and within [0, 2pi)', () => {
     const a = hashAngle(s);
     assert.ok(a >= 0 && a < Math.PI * 2);
   }
+});
+
+// ---- round 2: new fields, rename, duplicates, pin ----
+import { displayName, duplicatePrimaries, detailGroups, normalizeMeta, metaUrl, linkStrength } from '../graph-model.js';
+
+test('label priority: custom, friendly, hostname, dns, netbios, vendor, IP', () => {
+  const all = { custom_name: 'Mine', friendly_name: 'Living Room TV', hostname: 'host', dns_name: 'dns.local', netbios_name: 'NB', vendor: 'Vend', ip: '10.0.0.5' };
+  const order = ['custom_name', 'friendly_name', 'hostname', 'dns_name', 'netbios_name'];
+  const want = ['Mine', 'Living Room TV', 'host', 'dns', 'NB'];
+  const d = { ...all };
+  for (let i = 0; i < order.length; i++) {
+    assert.equal(labelText(d), want[i], order[i]);
+    assert.equal(displayName(d), i === 3 ? 'dns.local' : want[i]);
+    delete d[order[i]];
+  }
+  assert.equal(labelText(d), 'Vend');
+  delete d.vendor;
+  assert.equal(labelText(d), '10.0.0.5');
+});
+
+test('blank or null new fields are skipped, not shown', () => {
+  assert.equal(labelText({ custom_name: '  ', friendly_name: null, hostname: 'h', ip: '1.1.1.1' }), 'h');
+  assert.equal(displayName({ custom_name: '', ip: '1.1.1.1' }), '1.1.1.1');
+});
+
+test('duplicate primaries are tagged with the last IP octet', () => {
+  const a = dev('a', { hostname: 'Mac', ip: '10.0.0.172' });
+  const b = dev('b', { hostname: 'Mac', ip: '10.0.0.173' });
+  const c = dev('c', { hostname: 'tv', ip: '10.0.0.9' });
+  const dup = duplicatePrimaries([a, b, c]);
+  assert.deepEqual([...dup], ['Mac']);
+  assert.equal(labelParts(a, 22, dup.has('Mac')).primary, 'Mac .172');
+  assert.equal(labelParts(b, 22, true).primary, 'Mac .173');
+  assert.equal(labelParts(c, 22, dup.has('tv')).primary, 'tv');
+  assert.ok([...labelParts(dev('x', { hostname: 'a-very-long-human-hostname-indeed-yes', ip: '10.0.0.7' }), 22, true).primary].length <= 24);
+});
+
+test('detailGroups groups the fields, shows new ones only when present, formats rtt', () => {
+  const base = detailGroups(dev('a', { ip: '10.0.0.2', mac: 'aa', kind: 'tv' }), 0);
+  assert.deepEqual(base.map((g) => g.title), ['Identity', 'Hardware', 'Network', 'History']);
+  const flat = Object.fromEntries(base.flatMap((g) => g.rows));
+  for (const k of ['Name', 'Friendly name', 'DNS name', 'NetBIOS name', 'OS', 'Manufacturer', 'Model', 'Latency']) assert.ok(!(k in flat), k);
+  const full = Object.fromEntries(
+    detailGroups(dev('a', { ip: '10.0.0.2', mac: 'aa', custom_name: 'Den', friendly_name: 'F', dns_name: 'd', netbios_name: 'N', os_hint: 'Android', manufacturer: 'M', model: 'X1', rtt_ms: 4 }), 0).flatMap((g) => g.rows),
+  );
+  assert.equal(full.Name, 'Den');
+  assert.equal(full.Latency, '4 ms');
+  assert.equal(full.OS, 'Android');
+  assert.equal(full.Model, 'X1');
+  assert.equal(Object.fromEntries(detailGroups(dev('a', { rtt_ms: 12.6 }), 0).flatMap((g) => g.rows)).Latency, '13 ms');
+  assert.equal(Object.fromEntries(detailGroups(dev('a', { rtt_ms: 0.46 }), 0).flatMap((g) => g.rows)).Latency, '0.5 ms');
+  assert.ok(!('Latency' in Object.fromEntries(detailGroups(dev('a', { rtt_ms: 'x' }), 0).flatMap((g) => g.rows))));
+});
+
+test('normalizeMeta: empty clears, trims, enforces limits', () => {
+  assert.deepEqual(normalizeMeta('  ', '').body, { custom_name: null, notes: null });
+  assert.deepEqual(normalizeMeta(' Den ', ' hello\nworld ').body, { custom_name: 'Den', notes: 'hello\nworld' });
+  assert.ok(normalizeMeta('x'.repeat(65), '').error);
+  assert.ok(normalizeMeta('x'.repeat(64), '').body);
+  assert.ok(normalizeMeta('', 'y'.repeat(501)).error);
+  assert.ok(normalizeMeta('', 'y'.repeat(500)).body);
+  assert.equal(normalizeMeta('a\u202eb\u0000', '').body.custom_name, 'ab');
+  assert.equal(normalizeMeta(null, undefined).body.custom_name, null);
+});
+
+test('metaUrl encodes colons and @ in the id', () => {
+  assert.equal(metaUrl('aa:bb:cc'), '/api/devices/aa%3Abb%3Acc/meta');
+  assert.equal(metaUrl('a@b/c'), '/api/devices/a%40b%2Fc/meta');
+});
+
+test('linkStrength: live links glow, offline links fade with time', () => {
+  const now = 10 * 3600000;
+  assert.ok(linkStrength(dev('a'), now) > linkStrength(dev('x', { online: false, last_seen: now - 1000 }), now));
+  assert.ok(linkStrength(dev('x', { online: false, last_seen: now - 1000 }), now) > linkStrength(dev('y', { online: false, last_seen: now - 40 * 3600000 }), now));
+  assert.ok(linkStrength(undefined, now) > 0);
+});
+
+test('an update does not re-pin a gateway the user has moved; a role change does', () => {
+  const map = new Map();
+  reconcile(map, [dev('gw', { is_gateway: true })]);
+  const g = map.get('gw');
+  g.fx = 12; g.fy = 3; g.fz = 0;
+  upsertDevice(map, dev('gw', { is_gateway: true, ip: '1.2.3.4' }));
+  assert.equal(g.fx, 12);
+  upsertDevice(map, dev('gw', { is_gateway: false }));
+  assert.equal(g.fx, undefined);
+  upsertDevice(map, dev('gw', { is_gateway: true }));
+  assert.equal(g.fx, 0);
+});
+
+import { mixHex, pulseParams } from '../graph-model.js';
+
+test('mixHex blends and tolerates bad input', () => {
+  assert.equal(mixHex('#000000', '#ffffff', 0.5), '#808080');
+  assert.equal(mixHex('#102030', '#102030', 0.7), '#102030');
+  assert.equal(mixHex('#ff0000', '#0000ff', 0), '#ff0000');
+  assert.equal(mixHex('#ff0000', '#0000ff', 2), '#0000ff');
+  assert.equal(mixHex('rgba(1,2,3,0.4)', '#ffffff', 0.5), 'rgba(1,2,3,0.4)');
+});
+
+test('pulse: rtt drives speed and brightness when present, recency when not, offline is still', () => {
+  const now = 1_000_000;
+  const near = pulseParams(dev('a', { rtt_ms: 2 }), now);
+  const far = pulseParams(dev('b', { rtt_ms: 200 }), now);
+  assert.ok(near.speed > far.speed && near.glow > far.glow);
+  const fresh = pulseParams(dev('c', { last_seen: now - 1000 }), now);
+  const stale = pulseParams(dev('d', { last_seen: now - 3_600_000 }), now);
+  assert.ok(fresh.speed > stale.speed && fresh.glow > stale.glow);
+  assert.ok(stale.speed > 0, 'a quiet device still trickles');
+  assert.deepEqual(pulseParams(dev('e', { online: false, rtt_ms: 1 }), now), { speed: 0, glow: 0 });
+  // an unusable rtt falls back to recency instead of breaking
+  assert.deepEqual(pulseParams(dev('f', { rtt_ms: NaN, last_seen: now }), now), pulseParams(dev('f', { last_seen: now }), now));
+  assert.deepEqual(pulseParams(dev('g', { rtt_ms: -5, last_seen: now }), now), pulseParams(dev('g', { last_seen: now }), now));
+});
+
+test('collision radius gives this Mac room for its ring; two Macs keep their rings apart', () => {
+  const mac = dev('m', { is_self: true });
+  assert.ok(collisionRadius(mac) >= nodeRadius(mac) * 2.05 + 2);
+  assert.ok(collisionRadius(mac) * 2 > nodeRadius(mac) * 2.05 * 2 + 4);
+  assert.equal(collisionRadius(dev('o')), nodeRadius(dev('o')) + 6);
+});
+
+import { makeFlattenForce } from '../graph-model.js';
+
+test('flatten force pulls free nodes toward y = 0 and leaves pinned ones', () => {
+  const free = { y: 60, vy: 0 };
+  const pinned = { y: 60, vy: 0, fy: 60 };
+  const f = makeFlattenForce(0.03);
+  f.initialize([free, pinned]);
+  for (let i = 0; i < 200; i++) {
+    f();
+    free.y += free.vy;
+    free.vy *= 0.75; // friction, as in the simulation
+  }
+  assert.ok(Math.abs(free.y) < 5, 'y ' + free.y);
+  assert.equal(pinned.vy, 0);
 });

@@ -1,14 +1,19 @@
 import {
   collisionRadius,
-  detailRows,
+  detailGroups,
+  displayName,
   hashAngle,
   labelFor,
   linkParticles,
+  linkStrength,
   makeCollideForce,
+  makeFlattenForce,
+  metaUrl,
   nodeCategory,
   nodeColor,
   nodeSize,
   nodeStyle,
+  normalizeMeta,
   reconcile,
   removeDevice,
   seedPosition,
@@ -16,7 +21,7 @@ import {
   upsertDevice,
 } from './graph-model.js';
 import { createLabels } from './labels.js';
-import { createLinkMaterials, createNodes, createSpores, probeKit, setupRenderer } from './scene.js';
+import { createLinkMaterials, createNodes, createRings, createRoots, createSpores, probeKit, setupRenderer } from './scene.js';
 
 const statusbar = document.getElementById('statusbar');
 const statusText = document.getElementById('status-text');
@@ -25,6 +30,15 @@ const panel = document.getElementById('panel');
 const panelTitle = document.getElementById('panel-title');
 const panelRows = document.getElementById('panel-rows');
 const stage = document.getElementById('graph');
+const deviceList = document.getElementById('device-list');
+const editForm = document.getElementById('edit');
+const editName = document.getElementById('edit-name');
+const editNotes = document.getElementById('edit-notes');
+const editSave = document.getElementById('edit-save');
+const editReset = document.getElementById('edit-reset');
+const editMsg = document.getElementById('edit-msg');
+const params = new URLSearchParams(location.search);
+const debug = params.has('debug');
 const nodeMap = new Map();
 const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -32,8 +46,10 @@ let selectedId = null;
 let hoveredId = null;
 let ready = false; // the 3D kit has been probed and node objects are available
 let settled = false; // the first layout has cooled; later reheats are gentle
-let fitted = false;
+let userMoved = false; // the user has taken the camera: stop auto-framing
+let linkUnit = 74; // current link distance, also the radius of the first range ring
 let lastInteract = performance.now();
+const fitTimers = new Map();
 let gatewayReturn = null; // gateway released after a drag: eases back to the origin
 
 // ---- simulation tuning ----
@@ -49,8 +65,10 @@ const SIM = {
   linkStrength: 0.45,
   charge: -75,
   chargeMax: 340,
+  // Past ~10 leaves the shell must grow: distance and charge scale with cbrt(n / 10).
   reheatCap: 0.28,
   seedDistance: 66,
+  flatten: 0.03, // weak pull to the horizontal plane: less line-of-sight stacking at a pitched camera
 };
 
 function endpointNode(end) {
@@ -79,6 +97,27 @@ let nodes3d = null;
 let spores = null;
 let labels = null;
 let linkMats = null;
+let rings = null;
+let roots = null;
+let gatewayNode = null; // cached; cleared whenever the data changes
+let quality = '';
+let linkForce = null;
+let chargeForce = null;
+
+function unit01(id) {
+  return hashAngle(String(id)) / (Math.PI * 2);
+}
+
+/** Scale the layout with the device count and give each link its own length so leaves do not share one shell. */
+function tuneForces() {
+  if (!linkForce) return;
+  const scale = Math.max(1, Math.cbrt(Math.max(0, nodeMap.size - 1) / 10));
+  linkUnit = SIM.linkDistance * scale;
+  linkForce
+    .distance((l) => linkUnit * (0.8 + 0.4 * unit01(endpointNode(l.source)?.id ?? '')))
+    .strength(SIM.linkStrength / Math.sqrt(scale));
+  chargeForce.strength(SIM.charge * scale).distanceMax(SIM.chargeMax * scale);
+}
 
 try {
   graph = ForceGraph3D({ rendererConfig: { antialias: true, alpha: true, powerPreference: 'high-performance' } })(stage)
@@ -88,17 +127,9 @@ try {
     .d3AlphaMin(SIM.alphaMin)
     .d3VelocityDecay(SIM.velocityDecay)
     .cooldownTicks(Infinity)
-    .cooldownTime(60000)
+    .cooldownTime(Infinity)
     .nodeLabel(labelFor) // HTML, but labelFor escapes every field
     .nodeResolution(24)
-    .linkWidth(0.7)
-    .linkResolution(5)
-    .linkCurvature(0.16)
-    .linkCurveRotation((l) => hashAngle(endpointNode(l.source)?.id ?? ''))
-    .linkDirectionalParticles((l) => linkParticles(endpointNode(l.source)))
-    .linkDirectionalParticleWidth(1.5)
-    .linkDirectionalParticleSpeed((l) => (endpointNode(l.source)?.is_new ? 0.011 : 0.005))
-    .linkDirectionalParticleColor((l) => nodeStyle(endpointNode(l.source) || {}).color)
     .onNodeClick(selectNode)
     .onNodeHover((n) => {
       hoveredId = n ? n.id : null;
@@ -111,81 +142,225 @@ try {
       }
     })
     .onEngineStop(() => {
+      if (!ready || nodeMap.size === 0) return; // the probe-only graph cooling is not a real layout
       settled = true;
-      fitOnce();
+      scheduleFit(0, 'settle');
     });
 
+  graph.camera().position.set(0, 175, 270); // close to the final framing; refined once the layout settles
   const cap = () => (settled ? SIM.reheatCap : 1);
-  graph.d3Force('link').distance(SIM.linkDistance).strength(SIM.linkStrength);
-  graph.d3Force('charge').strength(SIM.charge).distanceMax(SIM.chargeMax);
-  graph.d3Force('link', damped(graph.d3Force('link'), cap));
-  graph.d3Force('charge', damped(graph.d3Force('charge'), cap));
+  linkForce = graph.d3Force('link');
+  chargeForce = graph.d3Force('charge');
+  tuneForces();
+  graph.d3Force('link', damped(linkForce, cap));
+  graph.d3Force('charge', damped(chargeForce, cap));
   graph.d3Force('collide', makeCollideForce(collisionRadius));
+  if (!(debug && params.has('noflat'))) graph.d3Force('flatten', makeFlattenForce(SIM.flatten));
 
   labels = createLabels(document.getElementById('labels'), graph);
   setupRenderer(graph);
-  probeKit(graph)
+  (debug && params.has('nokit') ? Promise.reject(new Error('3D kit disabled by ?nokit')) : probeKit(graph))
     .then((kit) => {
       nodes3d = createNodes(kit);
+      rings = createRings(kit, graph.scene());
       linkMats = createLinkMaterials(kit);
       spores = createSpores(kit, graph.scene());
-      graph
-        .nodeThreeObject(nodes3d.build)
-        .nodeThreeObjectExtend(false)
-        .linkMaterial(linkMaterialFor);
+      roots = createRoots(kit, graph.scene(), linkMats);
+      applyQuality();
+      graph.nodeThreeObject((d) => nodes3d.build(d)).nodeThreeObjectExtend(false).linkVisibility(false); // roots replace the library's links
       ready = true;
       scheduleRender(true);
-      setTimeout(fitOnce, 3500);
+      scheduleFit(2500, 'early');
+      scheduleFit(6000, 'late');
+      scheduleFit(11000, 'later');
     })
     .catch((e) => {
       // Degrade to the library's own spheres; labels and the panel still work.
-      graph.nodeColor(nodeColor).nodeVal(nodeSize).nodeOpacity(0.95).linkColor(() => 'rgba(120,190,170,0.45)');
+      graph.nodeColor(nodeColor).nodeVal(nodeSize).nodeOpacity(0.95).linkColor(() => 'rgba(120,190,170,0.45)').linkWidth(0.7).linkDirectionalParticles((l) => linkParticles(endpointNode(l.source))).linkDirectionalParticleWidth(1.5);
       ready = true;
-      statusText.textContent = e.message;
+      showNotice('Basic 3D mode: ' + e.message);
       scheduleRender(true);
+      scheduleFit(2500, 'early');
     });
 } catch (e) {
   statusText.textContent = 'WebGL is unavailable in this browser: ' + e.message;
 }
 
-/** Frame the whole graph once, unless the user has already taken the camera. */
-function fitOnce() {
-  if (fitted || performance.now() - lastInteract < 2000) return;
-  fitted = true;
-  graph.zoomToFit(1600, 120);
+/**
+ * Frame the whole graph (eased) unless the user has taken the camera. Timers are
+ * keyed, so the early and late fits both run, while repeated requests with the
+ * same key (a burst of updates) collapse into one.
+ */
+function scheduleFit(delay, key = 'update') {
+  clearTimeout(fitTimers.get(key));
+  fitTimers.set(
+    key,
+    setTimeout(() => {
+      if (userMoved || !graph || nodeMap.size === 0) return;
+      fitSphere();
+    }, delay),
+  );
 }
 
-function linkMaterialFor(l) {
-  const d = endpointNode(l.source);
-  const s = nodeStyle(d || {});
-  return linkMats(s.color, d && d.online === false ? 0.07 : 0.22 + 0.2 * s.glow);
+/**
+ * Frame the graph by its bounding sphere around the gateway instead of the
+ * library's box, which fit loosely (the graph spanned ~30% of the viewport).
+ * Distance is chosen so the sphere fits the narrower of the two view angles.
+ */
+function fitSphere() {
+  const gw = gateway();
+  const cam = graph.camera();
+  const ctl = graph.controls();
+  if (!gw) return;
+  let R = 0;
+  for (const n of nodeMap.values()) R = Math.max(R, Math.hypot((n.x || 0) - gw.x, (n.y || 0) - gw.y, (n.z || 0) - gw.z) + 14);
+  const W = stage.clientWidth || 1, H = stage.clientHeight || 1;
+  const half = Math.min((cam.fov * Math.PI) / 360, Math.atan(Math.tan((cam.fov * Math.PI) / 360) * (W / H)));
+  const dist = (R / Math.sin(half)) * 1.1;
+  const t = (ctl && ctl.target) || { x: 0, y: 0, z: 0 };
+  let dx = cam.position.x - t.x, dy = cam.position.y - t.y, dz = cam.position.z - t.z;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  dx /= len; dy /= len; dz /= len;
+  graph.cameraPosition({ x: gw.x + dx * dist, y: gw.y + dy * dist, z: gw.z + dz * dist }, gw, 1200);
+}
+
+/** The user asked for the map back: re-frame it and resume auto-framing for new devices. */
+function recenter() {
+  userMoved = false;
+  lastInteract = performance.now();
+  scheduleFit(0, 'recenter');
+}
+
+/** Detail of the 3D bodies by device count; applied when nodes are (re)built. */
+function applyQuality() {
+  const n = nodeMap.size;
+  const q = n > 60 ? 'lo' : n > 30 ? 'mid' : 'hi';
+  if (q === quality || !nodes3d) return false;
+  quality = q;
+  nodes3d.shells = q === 'hi' ? 10 : q === 'mid' ? 6 : 2;
+  nodes3d.detail = q === 'lo' ? 'lo' : 'hi';
+  return true;
+}
+
+let notice = null;
+function showNotice(text) {
+  notice = text;
+  renderBanners([]);
 }
 
 // ---- details panel ----
+
+let formId = null; // device the edit form is currently showing
+let dirty = false; // the user has typed since the form was filled
+let saving = false;
+
+function setMsg(text, kind) {
+  editMsg.textContent = text;
+  editMsg.className = kind || '';
+}
+
+function fillForm(d) {
+  editName.value = d.custom_name || '';
+  editNotes.value = d.notes || '';
+  editName.placeholder = displayName({ ...d, custom_name: null });
+  formId = d.id;
+  dirty = false;
+  setMsg('', '');
+}
 
 function renderPanel() {
   const d = selectedId && nodeMap.get(selectedId);
   if (!d) {
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
+    formId = null;
     return;
   }
   panel.classList.add('open');
   panel.setAttribute('aria-hidden', 'false');
   panel.style.setProperty('--accent', nodeStyle(d).color);
-  panelTitle.textContent = d.hostname || d.ip; // textContent only, never innerHTML
-  const rows = detailRows(d, Date.now()).flatMap(([k, v]) => {
-    const dt = document.createElement('dt');
-    dt.textContent = k;
-    const dd = document.createElement('dd');
-    dd.textContent = v;
-    return [dt, dd];
-  });
-  panelRows.replaceChildren(...rows);
+  panelTitle.textContent = displayName(d); // textContent only, never innerHTML
+  const out = [];
+  for (const g of detailGroups(d, Date.now())) {
+    const h = document.createElement('dt');
+    h.className = 'group';
+    h.textContent = g.title;
+    out.push(h);
+    for (const [k, v] of g.rows) {
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      out.push(dt, dd);
+    }
+  }
+  panelRows.replaceChildren(...out);
+  // Never overwrite what the user is typing; refresh the form only when it is clean.
+  if (formId !== d.id || (!dirty && !saving)) {
+    const keepMsg = formId === d.id ? editMsg.textContent : '';
+    const kind = editMsg.className;
+    fillForm(d);
+    if (keepMsg) setMsg(keepMsg, kind);
+  }
 }
+
+function markDirty() {
+  dirty = true;
+  setMsg('', '');
+}
+editName.addEventListener('input', markDirty);
+editNotes.addEventListener('input', markDirty);
+editReset.addEventListener('click', () => {
+  const d = nodeMap.get(selectedId);
+  if (d) fillForm(d);
+});
+
+editForm.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const d = nodeMap.get(selectedId);
+  if (!d || saving) return;
+  const m = normalizeMeta(editName.value, editNotes.value);
+  if (m.error) return setMsg(m.error, 'error');
+  saving = true;
+  editSave.disabled = true;
+  setMsg('Saving...', '');
+  try {
+    const res = await fetch(metaUrl(d.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Rhizome': '1' },
+      body: JSON.stringify(m.body),
+    });
+    if (!res.ok) {
+      const why = res.status === 404 ? 'the server cannot store names, or this device no longer exists' : `server said ${res.status}`;
+      setMsg(`Not saved: ${why}. Your edits are kept here.`, 'error');
+      return;
+    }
+    let updated = null;
+    try {
+      updated = await res.json();
+    } catch {
+      updated = null;
+    }
+    if (updated && typeof updated === 'object' && updated.id === d.id) {
+      if (upsertDevice(nodeMap, updated)) scheduleRender(true);
+    } else {
+      d.custom_name = m.body.custom_name;
+      d.notes = m.body.notes;
+    }
+    dirty = false;
+    scheduleRender(false);
+    setMsg('Saved.', 'ok');
+  } catch {
+    setMsg('Not saved: could not reach the server. Your edits are kept here.', 'error');
+  } finally {
+    saving = false;
+    editSave.disabled = false;
+  }
+});
 
 function selectNode(n) {
   selectedId = n.id;
+  userMoved = true;
   lastInteract = performance.now();
   renderPanel();
   const dist = 130;
@@ -208,6 +383,27 @@ function renderLegend() {
   const counts = { gw: 0, me: 0, on: 0, new: 0, off: 0 };
   for (const d of nodeMap.values()) counts[nodeCategory(d)]++;
   for (const [k, el] of Object.entries(legendCounts)) el.textContent = String(counts[k] ?? 0);
+  renderDeviceList();
+}
+
+// A visually hidden list of buttons: the canvas itself is not reachable by keyboard or screen reader.
+let listKey = '';
+function renderDeviceList() {
+  const devs = [...nodeMap.values()].sort((a, b) => String(a.ip).localeCompare(String(b.ip), undefined, { numeric: true }));
+  const key = devs.map((d) => [d.id, displayName(d), d.ip, d.online].join('|')).join('\n');
+  if (key === listKey) return;
+  listKey = key;
+  deviceList.replaceChildren(
+    ...devs.map((d) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `${displayName(d)}, ${d.ip}${d.online === false ? ', offline' : ''}`;
+      b.addEventListener('click', () => selectNode(d));
+      li.append(b);
+      return li;
+    }),
+  );
 }
 
 // ---- data flow ----
@@ -221,14 +417,15 @@ function scheduleRender(structureChanged) {
     pending.scheduled = false;
     if (pending.structure) {
       seedNewcomers();
+      tuneForces();
+      if (applyQuality()) graph.nodeThreeObject((d) => nodes3d.build(d)); // a new accessor makes the library rebuild every node
       graph.graphData(toGraphData(nodeMap));
-    } else {
-      // Re-evaluate accessors without re-heating the layout. Node colour and
-      // size are eased every frame in createNodes().animate.
-      graph.linkDirectionalParticles(graph.linkDirectionalParticles());
-      if (linkMats) graph.linkMaterial(graph.linkMaterial());
-      else graph.nodeColor(graph.nodeColor());
+      if (settled) scheduleFit(1500);
+    } else if (!roots) {
+      graph.nodeColor(graph.nodeColor()); // fallback mode: re-evaluate colours
     }
+    // With the 3D kit, node colour/size and the roots are eased every frame, so nothing to re-evaluate here.
+    gatewayNode = null;
     pending.structure = false;
     if (selectedId && !nodeMap.has(selectedId)) selectedId = null;
     renderPanel();
@@ -236,21 +433,24 @@ function scheduleRender(structureChanged) {
   });
 }
 
+function gateway() {
+  if (!gatewayNode || !nodeMap.has(gatewayNode.id)) gatewayNode = [...nodeMap.values()].find((n) => n.is_gateway) || null;
+  return gatewayNode;
+}
+
 /** Start new nodes on a random bearing around the gateway instead of on top of it. */
 function seedNewcomers() {
-  const gw = [...nodeMap.values()].find((n) => n.is_gateway);
+  const gw = gateway();
   for (const n of nodeMap.values()) {
     if (n.is_gateway || typeof n.x === 'number') continue;
     Object.assign(n, seedPosition(gw, Math.random, SIM.seedDistance));
   }
 }
 
-function showStatus(s) {
-  if (!s) return;
-  const parts = [`${s.online}/${s.devices} online`, s.iface, s.net];
-  if (s.gateway) parts.push('gw ' + s.gateway);
-  statusText.textContent = parts.filter(Boolean).join(' | ');
-  const notes = [...(s.warnings || [])];
+let warnings = [];
+function renderBanners(list) {
+  warnings = list;
+  const notes = [...warnings, ...(notice ? [notice] : [])];
   banners.replaceChildren(
     ...notes.map((w) => {
       const el = document.createElement('div');
@@ -259,6 +459,14 @@ function showStatus(s) {
       return el;
     }),
   );
+}
+
+function showStatus(s) {
+  if (!s) return;
+  const parts = [`${s.online}/${s.devices} online`, s.iface, s.net];
+  if (s.gateway) parts.push('gw ' + s.gateway);
+  statusText.textContent = parts.filter(Boolean).join(' | ');
+  renderBanners([...(s.warnings || [])]);
 }
 
 const es = new EventSource('/api/events');
@@ -277,11 +485,36 @@ es.onerror = () => {
   statusText.textContent = 'disconnected, retrying...';
 };
 
+// ---- recenter, keyboard, label exclusion zones ----
+
+document.getElementById('recenter').addEventListener('click', recenter);
+// The camera controls listen on window; keep typing in the form away from them.
+editForm.addEventListener('keydown', (e) => e.stopPropagation());
+window.addEventListener('keydown', (e) => {
+  if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) recenter();
+});
+
+/** Rectangles labels must stay out of: the HUD (brand, legend, recenter) and the open panel. */
+function updateExclusions() {
+  if (!labels) return;
+  const rects = [];
+  const hud = document.getElementById('hud').getBoundingClientRect();
+  rects.push({ x: hud.left - 6, y: hud.top - 6, w: hud.width + 12, h: hud.height + 12 });
+  if (panel.classList.contains('open')) rects.push({ x: window.innerWidth - 14 - 320 - 6, y: 8, w: 332, h: panel.offsetHeight + 12 });
+  labels.setExclusions(rects);
+}
+window.addEventListener('resize', updateExclusions);
+new MutationObserver(updateExclusions).observe(panel, { attributes: true, attributeFilter: ['class'] });
+if (typeof ResizeObserver === 'function') new ResizeObserver(updateExclusions).observe(panel);
+setTimeout(updateExclusions, 0);
+
 // ---- per-frame: node animation, camera drift, labels ----
 
 for (const ev of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
   window.addEventListener(ev, () => { lastInteract = performance.now(); }, { passive: true });
 }
+stage.addEventListener('pointerdown', () => { userMoved = true; });
+stage.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
 let pointerDown = false;
 window.addEventListener('pointerdown', () => { pointerDown = true; });
 window.addEventListener('pointerup', () => { pointerDown = false; lastInteract = performance.now(); });
@@ -321,17 +554,27 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!graph || !ready) return;
-  if (nodes3d) nodes3d.animate(now, dt, nodeMap, { selectedId, hoveredId, calm });
+  const gw = gateway();
+  if (nodes3d) nodes3d.animate(now, dt, nodeMap, { selectedId, hoveredId, calm, camera: graph.camera() });
+  if (rings) rings.place(gw, linkUnit);
+  if (roots) roots.update(now, dt, nodeMap, gw, { calm });
   if (spores) spores.animate(now, calm);
   easeGatewayHome(dt);
   if (!calm && !pointerDown && !selectedId && now - lastInteract > 5000 && gatewayReturn === null) drift(dt);
-  labels.update(nodeMap, { selectedId, hoveredId, calm });
+  labels.update(nodeMap, { selectedId, hoveredId, calm, dt, gateway: gw, roots });
 }
 requestAnimationFrame(frame);
 
-// Test and debugging hook: read-only view of the live scene state.
-window.__rhizome = {
-  nodeMap,
-  reheat: () => graph.d3ReheatSimulation(),
-  screenOf: (id) => { const n = nodeMap.get(id); return graph.graph2ScreenCoords(n.x, n.y, n.z); },
-  labelCount: () => (labels ? labels.count() : 0), settled: () => settled };
+// Test and debugging hook, present only with ?debug in the URL.
+if (debug) {
+  window.__rhizome = {
+    nodeMap,
+    reheat: () => graph.d3ReheatSimulation(),
+    screenOf: (id) => { const n = nodeMap.get(id); return graph.graph2ScreenCoords(n.x, n.y, n.z); },
+    inject: (devices) => scheduleRender(reconcile(nodeMap, devices).structureChanged),
+    labelStats: () => ({ ...labels.stats, labels: labels.count() }),
+    settled: () => settled,
+    linkUnit: () => linkUnit,
+    camera: () => graph.camera().position.toArray(),
+  };
+}
