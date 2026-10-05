@@ -8,18 +8,27 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="rings"></div>
   <div id="graph"></div>
-  <div id="statusbar"><span id="status-text">connecting...</span></div>
+  <div id="labels" aria-hidden="true"></div>
+  <header id="hud">
+    <div id="wordmark">rhizome<span>live map of this network</span></div>
+    <ul id="legend">
+      <li><i class="dot gw"></i>gateway<b data-count="gw">0</b></li>
+      <li><i class="dot me"></i>this Mac<b data-count="me">0</b></li>
+      <li><i class="dot on"></i>online<b data-count="on">0</b></li>
+      <li><i class="dot new"></i>new<b data-count="new">0</b></li>
+      <li><i class="dot off"></i>offline<b data-count="off">0</b></li>
+    </ul>
+  </header>
+  <div id="statusbar"><i class="pulse"></i><span id="status-text">connecting...</span></div>
+  <div id="hint">drag to orbit &middot; scroll to zoom &middot; click a device</div>
   <div id="banners"></div>
-  <aside id="panel" hidden>
+  <aside id="panel" aria-hidden="true">
     <button id="panel-close" type="button" aria-label="Close">&times;</button>
     <h2 id="panel-title"></h2>
     <dl id="panel-rows"></dl>
   </aside>
-  <div id="legend">
-    <span class="dot gw"></span>gateway <span class="dot me"></span>this Mac <span class="dot on"></span>online
-    <span class="dot new"></span>new <span class="dot off"></span>offline
-  </div>
   <script src="vendor/3d-force-graph.min.js"></script>
   <script type="module" src="app.js"></script>
 </body>

@@ -26,8 +26,27 @@ async fn vendored_library_is_served_as_javascript() {
 
 #[tokio::test]
 async fn app_modules_are_served() {
-    for p in ["/app.js", "/graph-model.js", "/style.css"] {
+    for p in [
+        "/app.js",
+        "/graph-model.js",
+        "/label-layout.js",
+        "/labels.js",
+        "/scene.js",
+        "/style.css",
+    ] {
         assert_eq!(get(p).await.status, StatusCode::OK, "{p}");
+    }
+}
+
+#[tokio::test]
+async fn vendored_fonts_are_served_from_the_same_origin() {
+    for p in [
+        "/vendor/fonts/ibm-plex-mono-latin-400-normal.woff2",
+        "/vendor/fonts/ibm-plex-mono-latin-500-normal.woff2",
+    ] {
+        let r = get(p).await;
+        assert_eq!(r.status, StatusCode::OK, "{p}");
+        assert!(r.content_type.contains("woff2"), "{p}: {}", r.content_type);
     }
 }
 

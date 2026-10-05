@@ -163,9 +163,11 @@ test('colours distinguish gateway, self, new, online and offline', () => {
   assert.match(nodeColor(dev('x', { online: false })), /rgba\(.*0\.\d+\)/, 'offline is translucent');
 });
 
-test('new devices get link particles, others none', () => {
-  assert.ok(linkParticles(dev('n', { is_new: true })) > 0);
-  assert.equal(linkParticles(dev('o')), 0);
+test('live links carry particles, new devices a denser stream, offline none', () => {
+  assert.ok(linkParticles(dev('n', { is_new: true })) > linkParticles(dev('o')));
+  assert.ok(linkParticles(dev('o')) > 0);
+  assert.equal(linkParticles(dev('x', { online: false })), 0);
+  assert.equal(linkParticles(undefined), 0);
 });
 
 test('detailRows lists the fields shown in the panel as plain text', () => {
@@ -189,4 +191,151 @@ test('detailRows shows SSDP location as plain text and omits empty optional rows
   const bare = Object.fromEntries(detailRows(dev('b', { ip: '10.0.0.3', mac: 'bb' }), 0));
   assert.ok(!('SSDP location' in bare));
   assert.ok(!('Hostname' in bare));
+});
+
+// ---- round 1: labels, node style, collision ----
+import { labelParts, labelText, nodeStyle, nodeRadius, collisionRadius, separate, makeCollideForce, seedPosition } from '../graph-model.js';
+
+test('label: hostname wins, then vendor, then IP', () => {
+  assert.equal(labelText(dev('a', { hostname: 'printer', vendor: 'HP', ip: '10.0.0.9' })), 'printer');
+  assert.equal(labelText(dev('a', { hostname: null, vendor: 'Sonos, Inc.', ip: '10.0.0.9' })), 'Sonos');
+  assert.equal(labelText(dev('a', { hostname: '', vendor: null, ip: '10.0.0.9' })), '10.0.0.9');
+  assert.equal(labelText(dev('a', { hostname: '   ', vendor: '  ', ip: '10.0.0.9' })), '10.0.0.9');
+});
+
+test('label: every device gets non-empty text, even with no fields at all', () => {
+  assert.ok(labelText({}).length > 0);
+  assert.ok(labelText({ ip: '10.0.0.1' }).length > 0);
+});
+
+test('label: vendor legal suffixes are trimmed, never to nothing', () => {
+  assert.equal(labelText(dev('a', { vendor: 'GIGA-BYTE TECHNOLOGY CO.,LTD.' })), 'GIGA-BYTE');
+  assert.equal(labelText(dev('a', { vendor: 'QDI Technology (H.K.) Limited' })), 'QDI');
+  assert.equal(labelText(dev('a', { vendor: 'Apple, Inc.' })), 'Apple');
+  assert.equal(labelText(dev('a', { vendor: 'Technology' })), 'Technology');
+});
+
+test('label: long machine hostnames lose the hex tail and .local; long text is ellipsized', () => {
+  assert.equal(labelText(dev('a', { hostname: 'Android_0123456789abcdef0123456789abcdef' })), 'Android');
+  assert.equal(labelText(dev('a', { hostname: 'macbook.local' })), 'macbook');
+  const long = labelText(dev('a', { hostname: 'a-very-long-human-hostname-indeed-yes' }));
+  assert.ok([...long].length <= 22);
+  assert.ok(long.endsWith('\u2026'));
+});
+
+test('label: control and bidi characters from the LAN are removed', () => {
+  const t = labelText(dev('a', { hostname: 'evil\u202Ename\n\u0000x' }));
+  assert.ok(!/[\u202e\u0000\n]/.test(t), JSON.stringify(t));
+  // markup stays plain text: the UI uses textContent, so it is never parsed
+  assert.equal(labelText(dev('a', { hostname: '<b>x</b>' })), '<b>x</b>');
+});
+
+test('label: secondary line carries the IP, or "private MAC" when the IP is the name', () => {
+  assert.deepEqual(labelParts(dev('a', { hostname: 'tv', ip: '10.0.0.2' })), { primary: 'tv', secondary: '10.0.0.2' });
+  assert.deepEqual(labelParts(dev('a', { ip: '10.0.0.3', randomized_mac: true })), { primary: '10.0.0.3', secondary: 'private MAC' });
+  assert.deepEqual(labelParts(dev('a', { ip: '10.0.0.3' })), { primary: '10.0.0.3', secondary: null });
+});
+
+test('nodeStyle uses the legend colours and fades offline devices', () => {
+  assert.equal(nodeStyle(dev('g', { is_gateway: true })).color, '#ffc247');
+  assert.equal(nodeStyle(dev('s', { is_self: true })).color, '#3ddcff');
+  assert.equal(nodeStyle(dev('n', { is_new: true })).color, '#ff7a3d');
+  assert.equal(nodeStyle(dev('o')).color, '#6ee7a8');
+  const off = nodeStyle(dev('x', { online: false }));
+  assert.ok(off.opacity < 0.5 && off.glow === 0);
+  const hexes = [dev('g', { is_gateway: true }), dev('s', { is_self: true }), dev('n', { is_new: true }), dev('o'), dev('x', { online: false })].map((d) => nodeStyle(d).color);
+  assert.equal(new Set(hexes).size, 5);
+  assert.ok(hexes.every((h) => /^#[0-9a-f]{6}$/.test(h)));
+});
+
+test('radii: gateway > this Mac > others, collision radius adds clearance', () => {
+  assert.ok(nodeRadius(dev('g', { is_gateway: true })) > nodeRadius(dev('s', { is_self: true })));
+  assert.ok(nodeRadius(dev('s', { is_self: true })) > nodeRadius(dev('o')));
+  assert.ok(collisionRadius(dev('o')) > nodeRadius(dev('o')));
+});
+
+function rng(seed) {
+  let s = seed;
+  return () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
+}
+
+function minGap(nodes) {
+  let worst = Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      worst = Math.min(worst, Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) - (collisionRadius(a) + collisionRadius(b)));
+    }
+  }
+  return worst;
+}
+
+test('separate: a crowd of overlapping nodes ends up with no overlap, pinned gateway untouched', () => {
+  const r = rng(7);
+  const nodes = [{ ...dev('gw', { is_gateway: true }), x: 0, y: 0, z: 0, fx: 0, fy: 0, fz: 0 }];
+  for (let i = 0; i < 40; i++) nodes.push({ ...dev('n' + i, i % 5 === 0 ? { is_self: true } : {}), x: (r() - 0.5) * 20, y: (r() - 0.5) * 20, z: (r() - 0.5) * 20 });
+  assert.ok(minGap(nodes) < 0);
+  for (let t = 0; t < 120; t++) separate(nodes, collisionRadius);
+  assert.ok(minGap(nodes) > -0.01, 'min gap ' + minGap(nodes));
+  assert.deepEqual([nodes[0].x, nodes[0].y, nodes[0].z], [0, 0, 0]);
+});
+
+test('separate: coincident nodes are pulled apart without NaN', () => {
+  const nodes = [{ ...dev('a'), x: 1, y: 1, z: 1 }, { ...dev('b'), x: 1, y: 1, z: 1 }];
+  for (let t = 0; t < 30; t++) separate(nodes, collisionRadius);
+  assert.ok(nodes.every((n) => Number.isFinite(n.x + n.y + n.z)));
+  assert.ok(minGap(nodes) > -0.01);
+});
+
+test('separate: nodes that are already clear do not move; the heavier node moves less', () => {
+  const far = [{ ...dev('a'), x: 0, y: 0, z: 0 }, { ...dev('b'), x: 100, y: 0, z: 0 }];
+  separate(far, collisionRadius);
+  assert.deepEqual([far[0].x, far[1].x], [0, 100]);
+  const mixed = [{ ...dev('g', { is_gateway: true }), x: 0, y: 0, z: 0 }, { ...dev('o'), x: 5, y: 0, z: 0 }];
+  separate(mixed, collisionRadius, { iterations: 1 });
+  assert.ok(Math.abs(mixed[0].x) < Math.abs(mixed[1].x - 5));
+});
+
+test('separate: removes only part of an overlap per iteration (eased, not snapped)', () => {
+  const nodes = [{ ...dev('a'), x: 0, y: 0, z: 0 }, { ...dev('b'), x: 4, y: 0, z: 0 }];
+  separate(nodes, collisionRadius, { iterations: 1, softness: 0.5 });
+  const d = Math.abs(nodes[1].x - nodes[0].x);
+  assert.ok(d > 4 && d < collisionRadius(nodes[0]) * 2, 'distance ' + d);
+});
+
+test('makeCollideForce follows the d3 force contract (initialize + call)', () => {
+  const nodes = [{ ...dev('a'), x: 0, y: 0, z: 0 }, { ...dev('b'), x: 1, y: 0, z: 0 }];
+  const f = makeCollideForce(collisionRadius);
+  f.initialize(nodes);
+  f(0.3);
+  assert.ok(Math.abs(nodes[1].x - nodes[0].x) > 1);
+});
+
+test('seedPosition lands at the requested distance from the gateway, on any bearing', () => {
+  const r = rng(3);
+  for (let i = 0; i < 20; i++) {
+    const p = seedPosition({ x: 10, y: -5, z: 2 }, r, 60);
+    assert.ok(Math.abs(Math.hypot(p.x - 10, p.y + 5, p.z - 2) - 60) < 1e-9);
+  }
+  const p = seedPosition(undefined, () => 0.5, 10);
+  assert.ok(Number.isFinite(p.x + p.y + p.z));
+});
+
+import { nodeCategory, hashAngle } from '../graph-model.js';
+
+test('nodeCategory follows the colour precedence and matches the five legend entries', () => {
+  assert.equal(nodeCategory(dev('g', { is_gateway: true, is_self: true })), 'gw');
+  assert.equal(nodeCategory(dev('s', { is_self: true })), 'me');
+  assert.equal(nodeCategory(dev('x', { online: false, is_new: true })), 'off');
+  assert.equal(nodeCategory(dev('n', { is_new: true })), 'new');
+  assert.equal(nodeCategory(dev('o')), 'on');
+});
+
+test('hashAngle is stable and within [0, 2pi)', () => {
+  assert.equal(hashAngle('abc'), hashAngle('abc'));
+  assert.notEqual(hashAngle('abc'), hashAngle('abd'));
+  for (const s of ['', 'a', '00:16:96:00:00:68', '\u{1F9A0}']) {
+    const a = hashAngle(s);
+    assert.ok(a >= 0 && a < Math.PI * 2);
+  }
 });
