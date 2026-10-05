@@ -21,6 +21,8 @@ import {
   upsertDevice,
 } from './graph-model.js';
 import { createLabels } from './labels.js';
+import { chatterEmitters, fakeSample, trafficGroup } from './traffic.js';
+import { createTrafficUI, initCollapsibles } from './traffic-ui.js';
 import { createLinkMaterials, createNodes, createRings, createRoots, createSpores, probeKit, setupRenderer } from './scene.js';
 
 const statusbar = document.getElementById('statusbar');
@@ -29,6 +31,7 @@ const banners = document.getElementById('banners');
 const panel = document.getElementById('panel');
 const panelTitle = document.getElementById('panel-title');
 const panelRows = document.getElementById('panel-rows');
+const panelTraffic = document.getElementById('panel-traffic');
 const stage = document.getElementById('graph');
 const deviceList = document.getElementById('device-list');
 const editForm = document.getElementById('edit');
@@ -91,6 +94,16 @@ function damped(force, cap) {
   });
   return proxy;
 }
+
+/** Brief shells from devices sending broadcast/multicast chatter (capture on only). */
+function emitChatter(sample) {
+  if (!nodes3d) return;
+  const now = performance.now();
+  for (const e of chatterEmitters(sample.capture, new Set(nodeMap.keys()))) nodes3d.emit(e.id, e.level, now);
+}
+
+const trafficUI = createTrafficUI({ onSample: emitChatter, onRender: () => renderPanelTraffic() });
+initCollapsibles(document.getElementById('hud'));
 
 let graph = null;
 let nodes3d = null;
@@ -295,6 +308,7 @@ function renderPanel() {
     }
   }
   panelRows.replaceChildren(...out);
+  renderPanelTraffic(true);
   // Never overwrite what the user is typing; refresh the form only when it is clean.
   if (formId !== d.id || (!dirty && !saving)) {
     const keepMsg = formId === d.id ? editMsg.textContent : '';
@@ -302,6 +316,34 @@ function renderPanel() {
     fillForm(d);
     if (keepMsg) setMsg(keepMsg, kind);
   }
+}
+
+let trafficKey = '';
+/** The Traffic group of the details panel. Rewritten only when its content changed. */
+function renderPanelTraffic(force = false) {
+  const d = selectedId && nodeMap.get(selectedId);
+  if (!d) return;
+  const g = trafficGroup(d, trafficUI.current());
+  const key = JSON.stringify([d.id, g]);
+  if (!force && key === trafficKey) return;
+  trafficKey = key;
+  const out = [];
+  const h = document.createElement('dt');
+  h.className = 'group';
+  h.textContent = g.title;
+  out.push(h);
+  for (const [k, v] of g.rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    out.push(dt, dd);
+  }
+  const note = document.createElement('dd');
+  note.className = 'note';
+  note.textContent = g.note;
+  out.push(note);
+  panelTraffic.replaceChildren(...out);
 }
 
 function markDirty() {
@@ -479,6 +521,13 @@ es.addEventListener('snapshot', (e) => {
 es.addEventListener('device', (e) => scheduleRender(upsertDevice(nodeMap, JSON.parse(e.data))));
 es.addEventListener('removed', (e) => scheduleRender(removeDevice(nodeMap, JSON.parse(e.data))));
 es.addEventListener('scan', (e) => showStatus(JSON.parse(e.data)));
+es.addEventListener('traffic', (e) => {
+  try {
+    trafficUI.push(JSON.parse(e.data));
+  } catch {
+    /* a malformed event is ignored; the stale timer covers a stream that stops */
+  }
+});
 es.onopen = () => statusbar.classList.add('live');
 es.onerror = () => {
   statusbar.classList.remove('live');
@@ -505,7 +554,10 @@ function updateExclusions() {
 }
 window.addEventListener('resize', updateExclusions);
 new MutationObserver(updateExclusions).observe(panel, { attributes: true, attributeFilter: ['class'] });
-if (typeof ResizeObserver === 'function') new ResizeObserver(updateExclusions).observe(panel);
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(updateExclusions).observe(panel);
+  new ResizeObserver(updateExclusions).observe(document.getElementById('hud')); // sections open and close
+}
 setTimeout(updateExclusions, 0);
 
 // ---- per-frame: node animation, camera drift, labels ----
@@ -557,7 +609,7 @@ function frame(now) {
   const gw = gateway();
   if (nodes3d) nodes3d.animate(now, dt, nodeMap, { selectedId, hoveredId, calm, camera: graph.camera() });
   if (rings) rings.place(gw, linkUnit);
-  if (roots) roots.update(now, dt, nodeMap, gw, { calm });
+  if (roots) roots.update(now, dt, nodeMap, gw, { calm, traffic: trafficUI.current() });
   if (spores) spores.animate(now, calm);
   easeGatewayHome(dt);
   if (!calm && !pointerDown && !selectedId && now - lastInteract > 5000 && gatewayReturn === null) drift(dt);
@@ -576,5 +628,25 @@ if (debug) {
     settled: () => settled,
     linkUnit: () => linkUnit,
     camera: () => graph.camera().position.toArray(),
+    traffic: () => trafficUI.current(),
   };
+}
+
+// ---- traffic feed: one fetch for the latest sample, then SSE events; a missing endpoint is a normal state ----
+
+trafficUI.start();
+if (debug && params.has('faketraffic')) {
+  // Synthetic samples through the same code path as real ones (?debug&faketraffic, or &faketraffic=nocap for "capture unavailable").
+  const feed = () => {
+    const ids = [...nodeMap.keys()];
+    const self = [...nodeMap.values()].find((n) => n.is_self);
+    trafficUI.push(fakeSample(Date.now() / 1000, { ids, selfId: self ? self.id : null, withCapture: params.get('faketraffic') !== 'nocap' }));
+  };
+  const feedTimer = setInterval(feed, 1000);
+  setTimeout(feed, 600);
+  if (window.__rhizome) window.__rhizome.pauseFake = () => clearInterval(feedTimer); // lets a test see the stale state
+} else {
+  fetch('/api/traffic', { headers: { Accept: 'application/json' } })
+    .then((res) => (res.ok ? res.json().then((j) => trafficUI.push(j)) : trafficUI.markMissing()))
+    .catch(() => trafficUI.markMissing());
 }

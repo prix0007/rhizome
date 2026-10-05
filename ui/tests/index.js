@@ -3,3 +3,4 @@
 import './graph-model.test.js';
 import './label-layout.test.js';
 import './roots.test.js';
+import './traffic.test.js';

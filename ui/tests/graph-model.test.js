@@ -475,3 +475,21 @@ test('flatten force pulls free nodes toward y = 0 and leaves pinned ones', () =>
   assert.ok(Math.abs(free.y) < 5, 'y ' + free.y);
   assert.equal(pinned.vy, 0);
 });
+
+import { isOpaqueName } from '../graph-model.js';
+
+test('opaque names: UUIDs, truncated UUIDs, hex runs and MACs are not names', () => {
+  for (const s of ['0a1b2c3d-4e5f-6071-8293', '0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9', 'uuid:0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9', '8f3a1c9e2b7d4455', 'aa:bb:cc:dd:ee:ff', 'AA-BB-CC-DD-EE-FF', '0a1b2c3d-4e5f']) assert.ok(isOpaqueName(s), s);
+  for (const s of ['Living-Room-TV', 'deadbeef', 'decade', 'Example-MacBook-Pro', 'host-25', 'tv', '', null, 'cafe-bar']) assert.ok(!isOpaqueName(s), String(s));
+});
+
+test('an opaque hostname falls through to the next source in labels and titles', () => {
+  const tv = dev('tv', { hostname: '0a1b2c3d-4e5f-6071-8293', vendor: 'Google, Inc.', ip: '10.0.0.82' });
+  assert.equal(labelText(tv), 'Google');
+  assert.equal(displayName(tv), 'Google');
+  assert.equal(labelText(dev('x', { hostname: '0a1b2c3d-4e5f-6071-8293', dns_name: 'lounge.local', ip: '1.1.1.1' })), 'lounge');
+  assert.equal(labelText(dev('y', { hostname: '8f3a1c9e2b7d4455', ip: '10.0.0.9' })), '10.0.0.9');
+  // a person-chosen name is never judged
+  assert.equal(labelText(dev('z', { custom_name: 'deadbeefcafe0123', hostname: 'h' })), 'deadbeefcafe0123');
+  assert.equal(labelText(dev('w', { friendly_name: '0a1b2c3d-4e5f-6071-8293' })), '0a1b2c3d-4e5f-6071-8293');
+});

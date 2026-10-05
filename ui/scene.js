@@ -5,6 +5,7 @@
 // Instead the few constructors needed are recovered from objects the bundle
 // builds itself (see probeKit). Nothing in this file touches the DOM.
 import { linkParticles, linkStrength, mixHex, nodeRadius, nodeStyle, pulseParams, hashAngle } from './graph-model.js';
+import { pulsePlan, rateLevel } from './traffic.js';
 import { SHAPES, buildRootGeometry, chooseRoll, rootCurve, rootMatrix, toWorld } from './roots.js';
 
 // Hard-coded three.js enum values (stable for years; re-check when 3d-force-graph is upgraded, see vendor/VERSIONS).
@@ -130,18 +131,22 @@ export function createNodes(kit) {
     }
     const pulse = new kit.Mesh(shellGeo, mat(kit, '#000000', { emissive: style.color, opacity: 0, depthWrite: false, blending: ADDITIVE }));
     pulse.raycast = () => {};
+    // A brief expanding shell when this device sends broadcast/multicast chatter (capture only).
+    const chatter = new kit.Mesh(shellGeo, mat(kit, '#000000', { emissive: '#d9ecff', opacity: 0, depthWrite: false, blending: ADDITIVE, side: BACK_SIDE }));
+    chatter.raycast = () => {};
+    chatter.visible = false;
     // This Mac wears a ring that always faces the camera: a shape cue, not only a hue.
     let ring = null;
     if (d.is_self) {
       ring = new kit.Mesh(ringGeo, mat(kit, '#000000', { emissive: style.color, opacity: 0.9, depthWrite: false, blending: ADDITIVE, side: DOUBLE_SIDE }));
       ring.raycast = () => {};
     }
-    body.add(pulse, ...halos, core);
+    body.add(pulse, chatter, ...halos, core);
     if (ring) body.add(ring);
 
     const rec = {
-      g, body, core, halos, pulse, ring,
-      materials: [core.material, pulse.material, ...halos.map((h) => h.material), ...(ring ? [ring.material] : [])],
+      g, body, core, halos, pulse, ring, chatter, emitAt: -1e9, emitLevel: 0,
+      materials: [core.material, pulse.material, chatter.material, ...halos.map((h) => h.material), ...(ring ? [ring.material] : [])],
       cur: new kit.Color(style.color),
       op: style.opacity,
       glow: style.glow,
@@ -213,6 +218,16 @@ export function createNodes(kit) {
         if (camera) rec.ring.quaternion.copy(camera.quaternion);
       }
 
+      // Broadcast/multicast chatter: one soft shell, 0.9 s, brighter for busier senders.
+      const ep = (now - rec.emitAt) / 900;
+      if (ep >= 0 && ep < 1 && !calm) {
+        rec.chatter.scale.setScalar(s * (1.3 + ep * 2.6));
+        rec.chatter.material.opacity = Math.pow(1 - ep, 1.6) * (0.18 + 0.3 * rec.emitLevel);
+        rec.chatter.visible = true;
+      } else if (rec.chatter.visible) {
+        rec.chatter.visible = false;
+      }
+
       // A slow ripple leaves the gateway; a new device pings faster.
       const period = d.is_gateway ? 3.6 : d.is_new && d.online !== false ? 1.9 : 0;
       if (period && !calm) {
@@ -227,6 +242,13 @@ export function createNodes(kit) {
     }
   }
 
+  /** Start a chatter emission on a device's node. */
+  api.emit = (id, level, now) => {
+    const rec = records.get(id);
+    if (!rec) return;
+    rec.emitAt = now;
+    rec.emitLevel = level;
+  };
   api.build = build;
   api.animate = animate;
   return api;
@@ -365,7 +387,7 @@ export function createRoots(kit, scene, linkMats) {
       }
       return true;
     },
-    update(now, dt, nodes, gateway, { calm = false, steer = true } = {}) {
+    update(now, dt, nodes, gateway, { calm = false, steer = true, traffic = null } = {}) {
       const t = now / 1000;
       const wall = Date.now();
       for (const [id, rec] of recs) {
@@ -411,23 +433,35 @@ export function createRoots(kit, scene, linkMats) {
         rec.mesh.matrixWorldNeedsUpdate = true;
         const style = nodeStyle(d);
         const col = d.online === false ? style.color : mixHex(style.color, '#9fe8d0', 0.4);
-        const strength = Math.round(Math.min(1, linkStrength(d, wall) * 1.7 * dens) * 20) / 20;
+        const plan = pulsePlan(d, traffic, pulseParams(d, wall));
+        // this Mac's own root brightens with its real throughput
+        const live = d.is_self && plan.mode === 'measured' && traffic && traffic.host ? rateLevel(Math.max(traffic.host.rx_bps || 0, traffic.host.tx_bps || 0)) : 0;
+        const strength = Math.round(Math.min(1, linkStrength(d, wall) * 1.7 * dens * (1 + 0.6 * live)) * 20) / 20;
         rec.mesh.material = linkMats(col, strength);
 
-        const pp = pulseParams(d, wall);
-        const want = calm ? 0 : pp.speed > 0 ? linkParticles(d) : 0;
+        let want = 0;
+        if (!calm) for (const st of plan.streams) want += plan.mode === 'latency' ? linkParticles(d) || 1 : st.count;
         if (rec.pulses.length !== want) setPulses(rec, want);
         if (!want) continue;
-        const bright = Math.round(pp.glow * 10) / 10;
-        const pcol = linkMats(mixHex(style.color, '#ffffff', 0.45), Math.min(1, 0.55 + 0.45 * bright));
-        for (let i = 0; i < rec.pulses.length; i++) {
-          const u = (rec.phase + t * pp.speed + i / rec.pulses.length) % 1;
-          rootCurve(u, SHAPES[rec.shape], pt);
-          toWorld(gwPos, rec.leaf, rec.roll, pt, world);
-          const mesh = rec.pulses[i];
-          mesh.position.set(world.x, world.y, world.z);
-          mesh.scale.setScalar((0.8 + 0.9 * bright) * Math.sin(Math.PI * u) + 0.01);
-          mesh.material = pcol;
+        // measured flow: bright white-hot, larger; latency estimate: dim, small, node-coloured
+        const measured = plan.mode === 'measured';
+        let pi = 0;
+        for (const st of plan.streams) {
+          const n = measured ? st.count : linkParticles(d) || 1;
+          const glow = Math.round(st.glow * 10) / 10;
+          const pcol = measured
+            ? linkMats(mixHex(style.color, '#ffffff', 0.8), 1)
+            : linkMats(mixHex(style.color, '#ffffff', 0.15), 0.35 + 0.15 * glow);
+          const size = measured ? 1.1 + 1.0 * glow : 0.5 + 0.5 * glow;
+          for (let c = 0; c < n; c++) {
+            const u = ((((rec.phase + t * st.speed * st.dir + c / n) % 1) + 1) % 1);
+            rootCurve(u, SHAPES[rec.shape], pt);
+            toWorld(gwPos, rec.leaf, rec.roll, pt, world);
+            const mesh = rec.pulses[pi++];
+            mesh.position.set(world.x, world.y, world.z);
+            mesh.scale.setScalar(size * Math.sin(Math.PI * u) + 0.01);
+            mesh.material = pcol;
+          }
         }
       }
     },

@@ -130,11 +130,37 @@ function pick(d, keys, shorten) {
 }
 
 const NAME_KEYS = ['custom_name', 'friendly_name', 'hostname', 'dns_name', 'netbios_name'];
+const MACHINE_KEYS = new Set(['hostname', 'dns_name', 'netbios_name']); // names a device or resolver made up itself
+
+/**
+ * True for names that are identifiers rather than names: a UUID (also a truncated one),
+ * a long run of hex digits, or a MAC address. `custom_name` and `friendly_name`
+ * are never judged this way: a person chose them.
+ */
+export function isOpaqueName(v) {
+  const s = String(v ?? '').trim().toLowerCase().replace(/^uuid:/, '');
+  if (!s) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s)) return true;
+  if (/^[0-9a-f]{8}(-[0-9a-f]{1,4}){1,4}$/.test(s)) return true; // truncated UUID
+  if (/^[0-9a-f]{12,}$/.test(s)) return true;
+  if (/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/.test(s)) return true;
+  return false;
+}
+
+function nameFrom(d, shorten) {
+  for (const k of NAME_KEYS) {
+    const v = shorten(d[k]);
+    if (!v) continue;
+    if (MACHINE_KEYS.has(k) && isOpaqueName(v)) continue;
+    return v;
+  }
+  return '';
+}
 
 /** Full (untruncated) display name: custom_name, friendly_name, hostname, dns_name, netbios_name, vendor, IP. */
 export function displayName(d) {
   return (
-    pick(d, NAME_KEYS, (v) => clean(v)) ||
+    nameFrom(d, (v) => clean(v)) ||
     shortVendor(d.vendor) ||
     clean(d.ip) ||
     clean(d.mac) ||
@@ -151,7 +177,7 @@ export function displayName(d) {
  * apart. Plain strings only; the UI sets them with textContent.
  */
 export function labelParts(d, max = 24, dup = false) {
-  const named = pick(d, NAME_KEYS, (v) => shortHost(v));
+  const named = nameFrom(d, (v) => shortHost(v));
   const base = named || shortVendor(d.vendor);
   const ip = clean(d.ip);
   if (base) {

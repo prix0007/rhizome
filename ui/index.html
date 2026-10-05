@@ -35,14 +35,44 @@
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="2.2" fill="currentColor"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/></svg>
       </button>
     </div>
-    <ul id="legend" aria-label="Legend: device colours and counts">
-      <li><i class="dot gw"></i>gateway<b data-count="gw">0</b></li>
-      <li><i class="dot me"></i>this Mac<b data-count="me">0</b></li>
-      <li><i class="dot on"></i>online<b data-count="on">0</b></li>
-      <li><i class="dot new"></i>new<b data-count="new">0</b></li>
-      <li><i class="dot off"></i>offline<b data-count="off">0</b></li>
-      <li class="note"><i class="dot ringkey"></i>ring: one hop out</li>
-    </ul>
+    <details class="hud-sec" id="sec-network" data-key="network" open>
+      <summary>Traffic <span class="sec-meta" id="net-iface"></span></summary>
+      <div class="sec-body">
+        <div class="rate-row"><span class="k">&darr; down</span><b id="net-rx">&mdash;</b><span class="k">&uarr; up</span><b id="net-tx">&mdash;</b></div>
+        <svg id="spark" viewBox="0 0 200 34" preserveAspectRatio="none" role="img" aria-label="This Mac's traffic over the last minute" focusable="false">
+          <polyline id="spark-rx" fill="none" stroke="#5fe08a" stroke-width="1.4" stroke-linejoin="round"/>
+          <polyline id="spark-tx" fill="none" stroke="#5ab0ff" stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
+        <div class="sub-k">This Mac&rsquo;s link</div>
+        <div id="net-link-title" class="val">&mdash;</div>
+        <div id="net-link-detail" class="dim"></div>
+        <div class="sub-k">Internet (whole network)</div>
+        <div class="rate-row"><span class="k">&darr;</span><b id="wan-rx">&mdash;</b><span class="k">&uarr;</span><b id="wan-tx">&mdash;</b></div>
+        <p id="net-note" class="dim note-line"></p>
+      </div>
+    </details>
+    <details class="hud-sec" id="sec-capture" data-key="capture">
+      <summary>Packet capture <span class="badge" id="cap-badge">unknown</span></summary>
+      <div class="sec-body">
+        <p id="cap-text" class="note-line"></p>
+        <p class="dim note-line">Capture, when on, sees only traffic that touches this Mac plus broadcast and multicast chatter from every device. Other devices&rsquo; traffic to each other or the internet is not visible.</p>
+      </div>
+    </details>
+    <details class="hud-sec" id="sec-legend" data-key="legend" open>
+      <summary>Legend</summary>
+      <div class="sec-body">
+        <ul id="legend" aria-label="Legend: device colours and counts">
+          <li><i class="dot gw"></i>gateway<b data-count="gw">0</b></li>
+          <li><i class="dot me"></i>this Mac<b data-count="me">0</b></li>
+          <li><i class="dot on"></i>online<b data-count="on">0</b></li>
+          <li><i class="dot new"></i>new<b data-count="new">0</b></li>
+          <li><i class="dot off"></i>offline<b data-count="off">0</b></li>
+          <li class="note"><i class="dot ringkey"></i>ring: one hop out</li>
+          <li class="note"><i class="dot pk measured"></i>pulse: measured flow</li>
+          <li class="note"><i class="dot pk latency"></i>pulse: latency only</li>
+        </ul>
+      </div>
+    </details>
   </header>
   <main id="stage" aria-label="Interactive 3D map of devices on the network">
     <div id="graph"></div>
@@ -56,6 +86,7 @@
     <button id="panel-close" type="button" aria-label="Close device details">&times;</button>
     <h2 id="panel-title"></h2>
     <dl id="panel-rows"></dl>
+    <dl id="panel-traffic"></dl>
     <form id="edit" autocomplete="off">
       <label for="edit-name">Name</label>
       <input id="edit-name" type="text" maxlength="64" spellcheck="false">
