@@ -137,7 +137,7 @@ mod tests {
         let db = OuiDb::from_csv(SMALL);
         for s in [
             "68:7F:F0:00:00:01",
-            "68-7f-f0-6b-6e-94",
+            "68-7f-f0-00-00-01",
             "687FF0:00:00:01".replace("687FF0", "68:7f:f0").as_str(),
         ] {
             assert_eq!(db.lookup(mac(s)), Some("Acme Networks, Inc."), "{s}");

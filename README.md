@@ -136,7 +136,7 @@ database mirrors the live state, and a newer observation always replaces the sto
 Names and notes are yours: they are never set or changed by anything learned from the network.
 
 ```sh
-curl -X PUT http://127.0.0.1:7878/api/devices/02%3A21%3A49%3Ab8%3A2c%3A62/meta \
+curl -X PUT http://127.0.0.1:7878/api/devices/02%3A00%3A00%3A00%3A00%3A62/meta \
   -H 'Origin: http://127.0.0.1:7878' -H 'X-Rhizomon: 1' -H 'Content-Type: application/json' \
   -d '{"custom_name": "Living room TV", "notes": "remote is in the drawer"}'
 ```

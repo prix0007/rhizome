@@ -8,8 +8,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +34,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal
@@ -72,6 +73,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -80,13 +84,16 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           cat dist/*.sha256 > dist/SHA256SUMS
-          gh release create "${{ github.ref_name }}" dist/* \
-            --repo "${{ github.repository }}" \
-            --title "Rhizomon ${{ github.ref_name }}" \
+          gh release create "$TAG" dist/* \
+            --repo "$REPO" \
+            --title "Rhizomon $TAG" \
             --generate-notes
       - name: Rebuild the site with the new release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run pages.yml --repo "${{ github.repository }}"
+          REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml --repo "$REPO"
