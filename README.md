@@ -204,7 +204,8 @@ offline; that is expected.
 ## Security model
 
 Rhizomon is a localhost-only service that handles data supplied by whoever is on your LAN,
-so it is defensive in both directions.
+so it is defensive in both directions. The latest independent pass over the whole repository
+is published in full: [security review, October 2026](docs/SECURITY-REVIEW-2026-10.md).
 
 - **Loopback only.** The listener is hardcoded to `127.0.0.1`; there is no flag to change it.
 - **DNS rebinding and cross-origin protection.** Every route, including static files, rejects
