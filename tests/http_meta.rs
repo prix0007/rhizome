@@ -8,10 +8,10 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use common::*;
-use rhizome::model::DeviceEvent;
-use rhizome::state::hub::Hub;
-use rhizome::store::Store;
-use rhizome::web::{AppState, router};
+use rhizomon::model::DeviceEvent;
+use rhizomon::state::hub::Hub;
+use rhizomon::store::Store;
+use rhizomon::web::{AppState, router};
 use tokio_util::sync::CancellationToken;
 
 const ORIGIN: &str = "http://127.0.0.1:7878";
@@ -46,7 +46,7 @@ fn put(id: &str, body: &str, origin: Option<&str>, x: Option<&str>) -> Request<B
         b = b.header("origin", o);
     }
     if let Some(x) = x {
-        b = b.header("x-rhizome", x);
+        b = b.header("x-rhizomon", x);
     }
     b.body(Body::from(body.to_string())).unwrap()
 }
@@ -170,7 +170,7 @@ async fn ids_with_at_signs_work_url_encoded() {
 }
 
 #[tokio::test]
-async fn missing_x_rhizome_or_origin_or_a_foreign_origin_is_forbidden_and_changes_nothing() {
+async fn missing_x_rhizomon_or_origin_or_a_foreign_origin_is_forbidden_and_changes_nothing() {
     let r = rig();
     let body = r#"{"custom_name":"hacked"}"#;
     let cases = [
@@ -284,7 +284,7 @@ async fn other_methods_on_the_route_are_not_allowed() {
             .uri(format!("/api/devices/{}/meta", enc(PHONE)))
             .header("host", HOST)
             .header("origin", ORIGIN)
-            .header("x-rhizome", "1")
+            .header("x-rhizomon", "1")
             .body(Body::from(r#"{"custom_name":"x"}"#))
             .unwrap();
         assert_eq!(
@@ -331,7 +331,7 @@ async fn a_scan_that_replaces_the_device_map_keeps_the_user_metadata() {
     )
     .await;
     // the scanner publishes a fresh map in which the device knows nothing of the edit
-    let mut fresh = rhizome::model::DeviceMap::new();
+    let mut fresh = rhizomon::model::DeviceMap::new();
     for d in r.hub.snapshot().devices {
         let mut d = d;
         d.custom_name = None;

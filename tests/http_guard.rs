@@ -97,7 +97,7 @@ async fn security_headers_on_all_responses() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert_eq!(csp, rhizome::web::headers::CSP);
+    assert_eq!(csp, rhizomon::web::headers::CSP);
     assert!(csp.contains("default-src 'self'"));
     assert!(csp.contains("script-src 'self'"));
     assert!(!csp.contains("script-src 'self' 'unsafe"));

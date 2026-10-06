@@ -5,12 +5,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use rhizome::discovery::arp_parse::ArpEntry;
-use rhizome::model::DeviceEvent;
-use rhizome::net::iface_select::Selected;
-use rhizome::scanner::{Collected, Collector, Scanner, ScannerConfig};
-use rhizome::state::hub::Hub;
-use rhizome::store::Store;
+use rhizomon::discovery::arp_parse::ArpEntry;
+use rhizomon::model::DeviceEvent;
+use rhizomon::net::iface_select::Selected;
+use rhizomon::scanner::{Collected, Collector, Scanner, ScannerConfig};
+use rhizomon::state::hub::Hub;
+use rhizomon::store::Store;
 
 fn sel() -> Selected {
     Selected {
@@ -34,7 +34,7 @@ fn e(ip: &str, mac: &str) -> ArpEntry {
 struct Script(Mutex<Vec<Result<Collected, String>>>);
 
 impl Collector for Script {
-    fn peek(&self) -> Pin<Box<dyn Future<Output = rhizome::scanner::Peek> + Send + '_>> {
+    fn peek(&self) -> Pin<Box<dyn Future<Output = rhizomon::scanner::Peek> + Send + '_>> {
         Box::pin(async move {
             let q = self.0.lock().unwrap();
             q[0].as_ref()
@@ -322,7 +322,7 @@ async fn history_is_not_mixed_across_networks() {
     assert!(ips.iter().all(|i| i.starts_with("10.0.0.")), "{ips:?}");
     let mut removed = 0;
     while let Ok(ev) = rx.try_recv() {
-        if matches!(ev, rhizome::model::DeviceEvent::Removed(_)) {
+        if matches!(ev, rhizomon::model::DeviceEvent::Removed(_)) {
             removed += 1;
         }
     }
@@ -336,7 +336,7 @@ async fn history_is_not_mixed_across_networks() {
 
 #[tokio::test]
 async fn mdns_hits_flow_into_devices_and_availability_into_status() {
-    use rhizome::model::MdnsHit;
+    use rhizomon::model::MdnsHit;
     let hub = Arc::new(Hub::new(64));
     let mut c = collected(vec![e("192.168.0.82", "2:0:0:0:0:62")]);
     c.mdns = vec![MdnsHit {
@@ -364,10 +364,10 @@ async fn mdns_hits_flow_into_devices_and_availability_into_status() {
 
 #[tokio::test]
 async fn mdns_failing_to_start_leaves_the_scanner_running() {
-    use rhizome::discovery::mdns::{MdnsSource, collect_mdns};
+    use rhizomon::discovery::mdns::{MdnsSource, collect_mdns};
     struct Failing;
     impl MdnsSource for Failing {
-        fn hits(&self, _fresh: std::time::Duration) -> Vec<rhizome::model::MdnsHit> {
+        fn hits(&self, _fresh: std::time::Duration) -> Vec<rhizomon::model::MdnsHit> {
             unreachable!("a failed source is never queried")
         }
     }
@@ -395,7 +395,7 @@ async fn mdns_failing_to_start_leaves_the_scanner_running() {
 
 #[tokio::test]
 async fn ssdp_observations_reach_devices() {
-    use rhizome::model::{SsdpHit, SsdpObservation};
+    use rhizomon::model::{SsdpHit, SsdpObservation};
     let hub = Arc::new(Hub::new(64));
     let mut c = collected(vec![
         e("192.168.0.1", "68:7f:f0:00:00:01"),
@@ -667,7 +667,7 @@ async fn under_the_cap_there_is_no_limit_warning() {
 
 #[tokio::test]
 async fn only_source_verified_identity_is_persisted_never_mdns_txt() {
-    use rhizome::model::{HostInfo, MdnsHit};
+    use rhizomon::model::{HostInfo, MdnsHit};
     let store = Arc::new(Store::open_in_memory().unwrap());
     let hub = Arc::new(Hub::new(64));
     let mut c = ping_all(collected(vec![

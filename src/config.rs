@@ -9,7 +9,7 @@ pub const MIN_INTERVAL_S: u64 = 10;
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq)]
 #[command(
-    name = "rhizome",
+    name = "rhizomon",
     version,
     about = "Local, real-time 3D map of your LAN"
 )]
@@ -23,7 +23,7 @@ pub struct Config {
     /// Seconds between scans (minimum 10).
     #[arg(long, default_value_t = 30)]
     pub interval: u64,
-    /// SQLite database path (default: ~/Library/Application Support/rhizome/rhizome.db).
+    /// SQLite database path (default: ~/Library/Application Support/rhizomon/rhizomon.db).
     #[arg(long)]
     pub db: Option<PathBuf>,
     /// Do not TCP-probe ARP-known hosts that ignore ping.
@@ -78,8 +78,8 @@ impl Config {
 
     pub fn db_path(&self) -> Option<PathBuf> {
         self.db.clone().or_else(|| {
-            directories::ProjectDirs::from("", "", "rhizome")
-                .map(|d| d.data_dir().join("rhizome.db"))
+            directories::ProjectDirs::from("", "", "rhizomon")
+                .map(|d| d.data_dir().join("rhizomon.db"))
         })
     }
 }
@@ -89,7 +89,7 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Config {
-        let mut v = vec!["rhizome"];
+        let mut v = vec!["rhizomon"];
         v.extend_from_slice(args);
         Config::try_parse_from(v).unwrap()
     }
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn port_out_of_range_fails_to_parse() {
-        assert!(Config::try_parse_from(["rhizome", "--port", "70000"]).is_err());
+        assert!(Config::try_parse_from(["rhizomon", "--port", "70000"]).is_err());
     }
 
     #[test]
@@ -163,8 +163,8 @@ mod tests {
 
     #[test]
     fn there_is_no_bind_address_flag() {
-        assert!(Config::try_parse_from(["rhizome", "--bind", "0.0.0.0"]).is_err());
-        assert!(Config::try_parse_from(["rhizome", "--host", "0.0.0.0"]).is_err());
+        assert!(Config::try_parse_from(["rhizomon", "--bind", "0.0.0.0"]).is_err());
+        assert!(Config::try_parse_from(["rhizomon", "--host", "0.0.0.0"]).is_err());
     }
 
     #[test]

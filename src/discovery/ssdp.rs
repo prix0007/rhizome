@@ -201,10 +201,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs a real LAN with multicast; set RHIZOME_TEST_IP and RHIZOME_TEST_NET"]
+    #[ignore = "needs a real LAN with multicast; set RHIZOMON_TEST_IP and RHIZOMON_TEST_NET"]
     async fn live_search_finds_upnp_devices() {
-        let ip: Ipv4Addr = std::env::var("RHIZOME_TEST_IP").unwrap().parse().unwrap();
-        let net: Ipv4Net = std::env::var("RHIZOME_TEST_NET").unwrap().parse().unwrap();
+        let ip: Ipv4Addr = std::env::var("RHIZOMON_TEST_IP").unwrap().parse().unwrap();
+        let net: Ipv4Net = std::env::var("RHIZOMON_TEST_NET").unwrap().parse().unwrap();
         let hits = search(ip, net, Duration::from_secs(3)).await.unwrap();
         for h in &hits {
             eprintln!("ssdp: {} server={:?} st={:?}", h.ip, h.hit.server, h.hit.st);

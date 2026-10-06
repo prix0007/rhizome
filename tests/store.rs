@@ -3,9 +3,9 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::device;
-use rhizome::store::Store;
+use rhizomon::store::Store;
 
-fn dev(ip: &str, mac: &str, first: i64, last: i64) -> rhizome::model::Device {
+fn dev(ip: &str, mac: &str, first: i64, last: i64) -> rhizomon::model::Device {
     let mut d = device(ip, mac, false);
     d.first_seen = first;
     d.last_seen = last;
@@ -112,7 +112,7 @@ fn meta_get_set_overwrite() {
 #[test]
 fn file_is_0600_and_new_directory_is_0700() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("sub").join("rhizome.db");
+    let path = dir.path().join("sub").join("rhizomon.db");
     let s = Store::open(&path).unwrap();
     s.upsert_many("n", &[dev("10.0.0.2", "aa:bb:cc:dd:ee:01", 1, 1)])
         .unwrap();
@@ -155,7 +155,7 @@ fn loose_existing_file_is_tightened() {
 #[test]
 fn data_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rhizome.db");
+    let path = dir.path().join("rhizomon.db");
     {
         let s = Store::open(&path).unwrap();
         s.upsert_many("n", &[dev("10.0.0.2", "aa:bb:cc:dd:ee:01", 10, 20)])

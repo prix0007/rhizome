@@ -2,9 +2,9 @@
 
 mod common;
 use common::device;
-use rhizome::store::Store;
+use rhizomon::store::Store;
 
-fn dev(ip: &str, mac: &str, first: i64, last: i64) -> rhizome::model::Device {
+fn dev(ip: &str, mac: &str, first: i64, last: i64) -> rhizomon::model::Device {
     let mut d = device(ip, mac, false);
     d.first_seen = first;
     d.last_seen = last;

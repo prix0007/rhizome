@@ -572,10 +572,10 @@ mod live {
     }
 
     #[tokio::test]
-    #[ignore = "needs the real LAN: set RHIZOME_TEST_NET and RHIZOME_TEST_GW"]
+    #[ignore = "needs the real LAN: set RHIZOMON_TEST_NET and RHIZOMON_TEST_GW"]
     async fn dgram_sweep_finds_the_gateway() {
-        let net: Ipv4Net = std::env::var("RHIZOME_TEST_NET").unwrap().parse().unwrap();
-        let gw: Ipv4Addr = std::env::var("RHIZOME_TEST_GW").unwrap().parse().unwrap();
+        let net: Ipv4Net = std::env::var("RHIZOMON_TEST_NET").unwrap().parse().unwrap();
+        let gw: Ipv4Addr = std::env::var("RHIZOMON_TEST_GW").unwrap().parse().unwrap();
         let t =
             crate::net::subnet::enumerate_targets(net, Ipv4Addr::new(0, 0, 0, 0), Some(gw), 1024);
         let start = std::time::Instant::now();
@@ -593,10 +593,10 @@ mod live {
     }
 
     #[tokio::test]
-    #[ignore = "needs the real LAN: set RHIZOME_TEST_NET and RHIZOME_TEST_GW"]
+    #[ignore = "needs the real LAN: set RHIZOMON_TEST_NET and RHIZOMON_TEST_GW"]
     async fn binary_sweep_finds_the_gateway() {
-        let net: Ipv4Net = std::env::var("RHIZOME_TEST_NET").unwrap().parse().unwrap();
-        let gw: Ipv4Addr = std::env::var("RHIZOME_TEST_GW").unwrap().parse().unwrap();
+        let net: Ipv4Net = std::env::var("RHIZOMON_TEST_NET").unwrap().parse().unwrap();
+        let gw: Ipv4Addr = std::env::var("RHIZOMON_TEST_GW").unwrap().parse().unwrap();
         let t =
             crate::net::subnet::enumerate_targets(net, Ipv4Addr::new(0, 0, 0, 0), Some(gw), 1024);
         let start = std::time::Instant::now();

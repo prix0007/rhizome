@@ -286,7 +286,7 @@ export function fakeSample(tSec, { ids = [], selfId = null, withCapture = true }
   };
 }
 
-const KEY = (k) => `rhizome.hud.${k}`;
+const KEY = (k) => `rhizomon.hud.${k}`;
 
 /** Remembered open/closed state of a HUD section. Storage may be missing or throw (private mode); then the fallback wins. */
 export function rememberedOpen(storage, key, fallback) {

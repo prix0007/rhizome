@@ -49,10 +49,10 @@ jobs:
       - run: cargo build --release --locked
       - uses: actions/upload-artifact@v4
         with:
-          name: rhizome-${{ matrix.os }}
+          name: rhizomon-${{ matrix.os }}
           path: |
-            target/release/rhizome
-            target/release/rhizome.exe
+            target/release/rhizomon
+            target/release/rhizomon.exe
           if-no-files-found: error
           retention-days: 14
 

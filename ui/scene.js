@@ -62,11 +62,11 @@ export function setupRenderer(graph) {
     if (o.isAmbientLight) {
       o.color.set('#7fa6b8');
       o.intensity = 0.22;
-    } else if (o.isDirectionalLight && !o.userData.rhizomeRim) {
+    } else if (o.isDirectionalLight && !o.userData.rhizomonRim) {
       o.color.set('#fff0d8');
       o.intensity = 1.7;
       const rim = o.clone();
-      rim.userData.rhizomeRim = true;
+      rim.userData.rhizomonRim = true;
       rim.color.set('#35e0c0');
       rim.intensity = 1.5;
       rim.position.set(-o.position.x - 60, -o.position.y - 40, -o.position.z - 120);
@@ -156,7 +156,7 @@ export function createNodes(kit) {
       phase: Math.random() * Math.PI * 2,
     };
     records.set(d.id, rec);
-    g.__rhizomeId = d.id;
+    g.__rhizomonId = d.id;
     return g;
   }
 

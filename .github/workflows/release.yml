@@ -43,9 +43,9 @@ jobs:
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
-          name=rhizome-${{ matrix.target }}
+          name=rhizomon-${{ matrix.target }}
           mkdir "$name"
-          cp target/${{ matrix.target }}/release/rhizome README.md "$name/"
+          cp target/${{ matrix.target }}/release/rhizomon README.md "$name/"
           cp LICENSE* "$name/" 2>/dev/null || true
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
@@ -53,19 +53,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "rhizome-${{ matrix.target }}"
+          $name = "rhizomon-${{ matrix.target }}"
           New-Item -ItemType Directory $name | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/rhizome.exe", README.md $name
+          Copy-Item "target/${{ matrix.target }}/release/rhizomon.exe", README.md $name
           Copy-Item LICENSE* $name -ErrorAction SilentlyContinue
           Compress-Archive -Path $name -DestinationPath "$name.zip"
           $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: rhizome-${{ matrix.target }}
+          name: rhizomon-${{ matrix.target }}
           path: |
-            rhizome-${{ matrix.target }}.tar.gz*
-            rhizome-${{ matrix.target }}.zip*
+            rhizomon-${{ matrix.target }}.tar.gz*
+            rhizomon-${{ matrix.target }}.zip*
           if-no-files-found: error
 
   publish:
@@ -83,5 +83,5 @@ jobs:
           cat dist/*.sha256 > dist/SHA256SUMS
           gh release create "${{ github.ref_name }}" dist/* \
             --repo "${{ github.repository }}" \
-            --title "Rhizome ${{ github.ref_name }}" \
+            --title "Rhizomon ${{ github.ref_name }}" \
             --generate-notes

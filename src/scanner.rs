@@ -451,7 +451,7 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-pub const LOCAL_NETWORK_HINT: &str = "macOS appears to be blocking access to the local network. Open System Settings > Privacy & Security > Local Network and enable the app you launched rhizome from (Terminal, iTerm, VS Code, ...), then restart rhizome.";
+pub const LOCAL_NETWORK_HINT: &str = "macOS appears to be blocking access to the local network. Open System Settings > Privacy & Security > Local Network and enable the app you launched rhizomon from (Terminal, iTerm, VS Code, ...), then restart rhizomon.";
 
 /// The real collector: ping sweep (fills the ARP cache), then ARP, then TCP probes.
 /// Settings for the real collector.

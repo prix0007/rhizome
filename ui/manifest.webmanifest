@@ -1,6 +1,6 @@
 {
-  "name": "Rhizome",
-  "short_name": "Rhizome",
+  "name": "Rhizomon",
+  "short_name": "Rhizomon",
   "description": "A live 3D map of every device on your local network.",
   "start_url": "./",
   "scope": "./",

@@ -365,10 +365,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "needs a real LAN and multicast; set RHIZOME_TEST_IP and RHIZOME_TEST_NET"]
+    #[ignore = "needs a real LAN and multicast; set RHIZOMON_TEST_IP and RHIZOMON_TEST_NET"]
     async fn live_browse_coexists_with_mdnsresponder() {
-        let iface = std::env::var("RHIZOME_TEST_IP").unwrap().parse().unwrap();
-        let net: Ipv4Net = std::env::var("RHIZOME_TEST_NET").unwrap().parse().unwrap();
+        let iface = std::env::var("RHIZOMON_TEST_IP").unwrap().parse().unwrap();
+        let net: Ipv4Net = std::env::var("RHIZOMON_TEST_NET").unwrap().parse().unwrap();
         let svc =
             MdnsService::start(iface, net).expect("mdns-sd must start alongside mDNSResponder");
         tokio::time::sleep(Duration::from_secs(10)).await;

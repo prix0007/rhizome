@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Download Rhizome - live 3D map of your local network</title>
-<meta name="description" content="Rhizome maps every device on your local network in a live 3D graph. It runs entirely on your machine: no cloud, no account, no telemetry. Download for macOS, Linux and Windows.">
+<title>Download Rhizomon - live 3D map of your local network</title>
+<meta name="description" content="Rhizomon maps every device on your local network in a live 3D graph. It runs entirely on your machine: no cloud, no account, no telemetry. Download for macOS, Linux and Windows.">
 <link rel="canonical" href="__PAGE_URL__">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <meta name="theme-color" content="#07100f">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Rhizome - live 3D map of your local network">
+<meta property="og:title" content="Rhizomon - live 3D map of your local network">
 <meta property="og:description" content="See every device on your network in a live 3D graph. Runs locally; your data never leaves your machine.">
 <meta property="og:url" content="__PAGE_URL__">
 <meta property="og:image" content="__PAGE_URL__logo.svg">
@@ -54,31 +54,31 @@
 <body>
 <main>
   <header>
-    <img src="logo.svg" alt="Rhizome logo" width="88" height="88">
+    <img src="logo.svg" alt="Rhizomon logo" width="88" height="88">
     <div>
-      <h1>RHIZOME</h1>
+      <h1>RHIZOMON</h1>
       <p class="lede">A live 3D map of every device on your local network. One small program, opened in your browser. Nothing leaves your machine.</p>
     </div>
   </header>
 
   <h2>Download</h2>
   <div class="grid" id="downloads">
-    <a class="card" data-os="mac" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-apple-darwin.tar.gz">
+    <a class="card" data-os="mac" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizomon-aarch64-apple-darwin.tar.gz">
       <strong>macOS, Apple Silicon</strong><span>M1 and later · .tar.gz</span>
     </a>
-    <a class="card" data-os="mac" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-apple-darwin.tar.gz">
+    <a class="card" data-os="mac" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizomon-x86_64-apple-darwin.tar.gz">
       <strong>macOS, Intel</strong><span>x86_64 · .tar.gz</span>
     </a>
-    <a class="card" data-os="linux" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-unknown-linux-gnu.tar.gz">
+    <a class="card" data-os="linux" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizomon-x86_64-unknown-linux-gnu.tar.gz">
       <strong>Linux, x86_64</strong><span>glibc 2.35+ · .tar.gz</span>
     </a>
-    <a class="card" data-os="linux" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-unknown-linux-gnu.tar.gz">
+    <a class="card" data-os="linux" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizomon-aarch64-unknown-linux-gnu.tar.gz">
       <strong>Linux, ARM64</strong><span>Raspberry Pi 4/5 (64-bit), ARM servers · .tar.gz</span>
     </a>
-    <a class="card" data-os="win" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizome-x86_64-pc-windows-msvc.zip">
+    <a class="card" data-os="win" data-arch="x64" href="https://github.com/__REPO__/releases/latest/download/rhizomon-x86_64-pc-windows-msvc.zip">
       <strong>Windows, x86_64</strong><span>Windows 10 and 11 · .zip</span>
     </a>
-    <a class="card" data-os="win" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizome-aarch64-pc-windows-msvc.zip">
+    <a class="card" data-os="win" data-arch="arm" href="https://github.com/__REPO__/releases/latest/download/rhizomon-aarch64-pc-windows-msvc.zip">
       <strong>Windows, ARM64</strong><span>Windows 11 on ARM · .zip</span>
     </a>
   </div>
@@ -100,15 +100,29 @@
   </p>
 
   <h2>Run it</h2>
-  <pre>tar -xzf rhizome-*.tar.gz
-cd rhizome-*
-./rhizome</pre>
-  <p>Then open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> in your browser.</p>
-  <ul>
-    <li><strong>macOS:</strong> the binary is not notarised. If macOS blocks it, run <code>xattr -d com.apple.quarantine ./rhizome</code>, and allow Local Network access for your terminal when asked.</li>
-    <li><strong>Windows:</strong> unzip, then run <code>rhizome.exe</code> from a terminal.</li>
-    <li><strong>From source:</strong> <code>cargo run --release</code> with a recent Rust toolchain.</li>
-  </ul>
+  <p>Then open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> in your browser. Stop it with Ctrl-C.</p>
+  <h3>macOS</h3>
+  <pre>tar -xzf rhizomon-*-apple-darwin.tar.gz
+cd rhizomon-*-apple-darwin
+chmod +x rhizomon
+xattr -d com.apple.quarantine rhizomon   # the binary is not notarised
+./rhizomon</pre>
+  <p class="lede">Allow Local Network access for your terminal when macOS asks; without it the scan sees only the router.</p>
+  <h3>Linux</h3>
+  <pre>tar -xzf rhizomon-*-unknown-linux-gnu.tar.gz
+cd rhizomon-*-unknown-linux-gnu
+chmod +x rhizomon
+./rhizomon</pre>
+  <p class="lede">Needs glibc 2.35 or newer. If unprivileged ping is disabled on your system (<code>net.ipv4.ping_group_range</code>), the system <code>ping</code> is used instead.</p>
+  <h3>Windows (PowerShell)</h3>
+  <pre>Expand-Archive rhizomon-*-pc-windows-msvc.zip -DestinationPath .
+cd rhizomon-*-pc-windows-msvc
+.\rhizomon.exe</pre>
+  <p class="lede">The binary is not code-signed, so SmartScreen may show "Windows protected your PC": choose More info, then Run anyway. Allow it on private networks if Windows Firewall asks.</p>
+  <h3>From source</h3>
+  <pre>git clone https://github.com/__REPO__.git
+cd rhizomon
+cargo run --release</pre>
 
   <h2>What it does</h2>
   <ul>
@@ -118,7 +132,7 @@ cd rhizome-*
   </ul>
   <p class="lede">Only scan networks you own or are allowed to scan.</p>
 
-  <footer>Rhizome is open source. <a href="https://github.com/__REPO__">github.com/__REPO__</a></footer>
+  <footer>Rhizomon is open source. <a href="https://github.com/__REPO__">github.com/__REPO__</a></footer>
 </main>
 <script>
   (function () {

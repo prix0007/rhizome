@@ -4,12 +4,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use rhizome::discovery::arp_parse::ArpEntry;
-use rhizome::model::{DeviceEvent, UserMeta};
-use rhizome::net::iface_select::Selected;
-use rhizome::scanner::{Collected, Collector, Peek, Scanner, ScannerConfig};
-use rhizome::state::hub::Hub;
-use rhizome::store::Store;
+use rhizomon::discovery::arp_parse::ArpEntry;
+use rhizomon::model::{DeviceEvent, UserMeta};
+use rhizomon::net::iface_select::Selected;
+use rhizomon::scanner::{Collected, Collector, Peek, Scanner, ScannerConfig};
+use rhizomon::state::hub::Hub;
+use rhizomon::store::Store;
 
 const T0: i64 = 1_000_000;
 const NET: &str = "68:7f:f0:00:00:01";

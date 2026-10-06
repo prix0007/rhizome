@@ -1,5 +1,5 @@
 [package]
-name = "rhizome"
+name = "rhizomon"
 version = "0.1.0"
 edition = "2024"
 description = "Local network mapper for macOS: scans your LAN and shows it as a live 3D graph in your browser. One binary, nothing leaves your machine."

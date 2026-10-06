@@ -74,7 +74,7 @@ pub async fn fetch_full_at(
     total_timeout: Duration,
 ) -> Option<Fetched> {
     let request = format!(
-        "GET {path} HTTP/1.0\r\nHost: {}:{}\r\nUser-Agent: rhizome\r\nAccept: text/xml\r\nConnection: close\r\n\r\n",
+        "GET {path} HTTP/1.0\r\nHost: {}:{}\r\nUser-Agent: rhizomon\r\nAccept: text/xml\r\nConnection: close\r\n\r\n",
         addr.ip(),
         addr.port()
     );

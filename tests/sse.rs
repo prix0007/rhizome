@@ -5,8 +5,8 @@ use std::time::Duration;
 use axum::body::Body;
 use common::*;
 use http_body_util::BodyExt;
-use rhizome::model::{DeviceEvent, ScanStatus};
-use rhizome::state::hub::Hub;
+use rhizomon::model::{DeviceEvent, ScanStatus};
+use rhizomon::state::hub::Hub;
 
 async fn next_chunk(body: &mut Body) -> String {
     loop {
@@ -100,7 +100,7 @@ async fn lagged_receiver_gets_a_fresh_snapshot() {
 
 #[tokio::test]
 async fn stream_ends_on_shutdown() {
-    use rhizome::web::{AppState, router};
+    use rhizomon::web::{AppState, router};
     let token = tokio_util::sync::CancellationToken::new();
     let app = router(AppState::new(seeded_hub(), PORT, token.clone()));
     let res = tower::ServiceExt::oneshot(app, get_req("/api/events", Some(HOST), None))

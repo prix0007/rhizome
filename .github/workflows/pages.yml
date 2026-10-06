@@ -51,7 +51,11 @@ jobs:
           else
             echo "no release yet" > _site/releases/latest/VERSION
           fi
-          page_url="https://${OWNER}.github.io/${NAME}/"
+          if [ -s site/CNAME ]; then
+            page_url="https://$(tr -d '[:space:]' < site/CNAME)/"
+          else
+            page_url="https://${OWNER}.github.io/${NAME}/"
+          fi
           sed -i "s|__REPO__|${REPO}|g; s|__PAGE_URL__|${page_url}|g; s|__VERSION__|${tag:-none}|g" _site/index.html
           du -sh _site
       - name: Commit to gh-pages

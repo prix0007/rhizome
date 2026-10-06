@@ -1,4 +1,4 @@
-//! Rhizome: a local, real-time 3D map of the LAN this machine is on.
+//! Rhizomon: a local, real-time 3D map of the LAN this machine is on.
 //!
 //! Pure logic (parsers, merge, classification) lives apart from the I/O
 //! adapters so it can be unit-tested against fixtures.

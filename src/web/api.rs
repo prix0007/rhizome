@@ -78,7 +78,7 @@ pub async fn events(State(st): State<AppState>) -> impl axum::response::IntoResp
 }
 
 /// `PUT /api/devices/{id}/meta`: the user's name and notes for one device.
-/// (Origin and `X-Rhizome` are enforced by the route's middleware.)
+/// (Origin and `X-Rhizomon` are enforced by the route's middleware.)
 pub async fn put_meta(
     State(st): State<AppState>,
     Path(id): Path<String>,

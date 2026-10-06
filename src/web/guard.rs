@@ -31,10 +31,10 @@ pub fn is_page_navigation(
 }
 
 /// State-changing requests need more than a plain GET does: an `Origin` that is
-/// present and exactly ours (not merely absent), and the custom `X-Rhizome: 1`
+/// present and exactly ours (not merely absent), and the custom `X-Rhizomon: 1`
 /// header, which a cross-origin page cannot send without a preflight we refuse.
-pub fn mutation_allowed(origin: Option<&str>, x_rhizome: &[&str], port: u16) -> bool {
-    origin.is_some() && origin_allowed(origin, port) && x_rhizome == ["1"]
+pub fn mutation_allowed(origin: Option<&str>, x_rhizomon: &[&str], port: u16) -> bool {
+    origin.is_some() && origin_allowed(origin, port) && x_rhizomon == ["1"]
 }
 
 /// Route-level middleware for state-changing routes (runs before the body is read).
@@ -53,7 +53,7 @@ pub async fn mutation_guard(
         .filter_map(|v| v.to_str().ok())
         .collect();
     let xs: Vec<&str> = headers
-        .get_all("x-rhizome")
+        .get_all("x-rhizomon")
         .iter()
         .filter_map(|v| v.to_str().ok())
         .collect();
@@ -64,7 +64,7 @@ pub async fn mutation_guard(
     if !mutation_allowed(origin, &xs, st.port) {
         return (
             StatusCode::FORBIDDEN,
-            "forbidden: same-origin request with X-Rhizome required",
+            "forbidden: same-origin request with X-Rhizomon required",
         )
             .into_response();
     }
@@ -179,7 +179,7 @@ mod tests {
         assert!(!mutation_allowed(Some("http://evil.com"), &["1"], p));
         assert!(!mutation_allowed(Some("null"), &["1"], p));
         assert!(!mutation_allowed(Some("http://127.0.0.1:9"), &["1"], p));
-        assert!(!mutation_allowed(ok, &[], p), "X-Rhizome missing");
+        assert!(!mutation_allowed(ok, &[], p), "X-Rhizomon missing");
         assert!(!mutation_allowed(ok, &["0"], p));
         assert!(!mutation_allowed(ok, &["true"], p));
         assert!(

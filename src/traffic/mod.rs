@@ -77,7 +77,7 @@ pub struct Sample {
 }
 
 pub const CAPTURE_OFF_REASON: &str =
-    "Packet capture is off. Start rhizome with --capture to enable it.";
+    "Packet capture is off. Start rhizomon with --capture to enable it.";
 
 impl Sample {
     pub fn empty(capture_enabled: bool, ts: i64) -> Self {

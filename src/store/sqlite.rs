@@ -17,7 +17,7 @@ pub enum StoreError {
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
     #[error(
-        "this database was created by a newer rhizome (schema version {found}, this build supports up to {supported}); upgrade rhizome or use another --db"
+        "this database was created by a newer rhizomon (schema version {found}, this build supports up to {supported}); upgrade rhizomon or use another --db"
     )]
     TooNew { found: i64, supported: i64 },
 }

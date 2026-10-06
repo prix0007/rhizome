@@ -5,9 +5,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use rhizome::model::{Device, DeviceKind, MacAddr};
-use rhizome::state::hub::Hub;
-use rhizome::web::{AppState, router};
+use rhizomon::model::{Device, DeviceKind, MacAddr};
+use rhizomon::state::hub::Hub;
+use rhizomon::web::{AppState, router};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
@@ -34,7 +34,7 @@ pub fn app_with(hub: Arc<Hub>) -> Router {
 
 pub fn seeded_hub() -> Arc<Hub> {
     let hub = Arc::new(Hub::new(16));
-    let mut map = rhizome::model::DeviceMap::new();
+    let mut map = rhizomon::model::DeviceMap::new();
     for d in [
         device("192.168.0.1", "68:7f:f0:00:00:01", true),
         device("192.168.0.82", "2:0:0:0:0:62", false),

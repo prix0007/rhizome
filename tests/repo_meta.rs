@@ -10,14 +10,14 @@ fn read(p: &str) -> String {
 fn readme_opens_with_the_logo_and_a_plain_description() {
     let readme = read("README.md");
     let first_lines: String = readme.lines().take(12).collect::<Vec<_>>().join("\n");
-    assert!(first_lines.contains(r#"<img src="ui/logo.svg" width="96" alt="Rhizome logo">"#));
+    assert!(first_lines.contains(r#"<img src="ui/logo.svg" width="96" alt="Rhizomon logo">"#));
     assert!(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("ui/logo.svg")
             .exists(),
         "the logo file must exist"
     );
-    assert!(readme.contains("# Rhizome"));
+    assert!(readme.contains("# Rhizomon"));
     assert!(readme.contains("local network mapper"));
 }
 
@@ -27,7 +27,7 @@ fn readme_documents_the_new_sources_flag_and_endpoint() {
     for needle in [
         "--no-netbios",
         "PUT /api/devices/{id}/meta",
-        "X-Rhizome",
+        "X-Rhizomon",
         "UPnP",
         "NetBIOS",
         "gateway",

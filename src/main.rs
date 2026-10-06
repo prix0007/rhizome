@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use rhizome::config::Config;
-use rhizome::net::iface::select_now;
-use rhizome::net::iface_select::SelectError;
-use rhizome::scanner::{LiveCollector, LiveOptions, Scanner, ScannerConfig};
-use rhizome::state::hub::Hub;
-use rhizome::store::Store;
-use rhizome::traffic::{IgdSlot, TrafficHub, TrafficOptions};
-use rhizome::web::{AppState, listen_url, loopback_addr, router};
+use rhizomon::config::Config;
+use rhizomon::net::iface::select_now;
+use rhizomon::net::iface_select::SelectError;
+use rhizomon::scanner::{LiveCollector, LiveOptions, Scanner, ScannerConfig};
+use rhizomon::state::hub::Hub;
+use rhizomon::store::Store;
+use rhizomon::traffic::{IgdSlot, TrafficHub, TrafficOptions};
+use rhizomon::web::{AppState, listen_url, loopback_addr, router};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
             interval_s: cfg.interval,
             offline_after_ms: cfg.offline_after_ms(),
             new_window_ms: 10 * 60 * 1000,
-            max_devices: rhizome::state::merge::DEFAULT_MAX_DEVICES,
+            max_devices: rhizomon::state::merge::DEFAULT_MAX_DEVICES,
         },
     );
     if let Some(store) = &store {
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     scanner = scanner.with_traffic(traffic.clone());
     let scan_task = tokio::spawn(scanner.run(shutdown.clone()));
     // Host throughput, link info, WAN counters and (opt-in) packet-flow summaries.
-    tokio::spawn(rhizome::traffic::run(
+    tokio::spawn(rhizomon::traffic::run(
         traffic.clone(),
         hub.clone(),
         TrafficOptions {

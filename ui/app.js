@@ -378,7 +378,7 @@ editForm.addEventListener('submit', async (ev) => {
   try {
     const res = await apiFetch(metaUrl(d.id), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Rhizome': '1' },
+      headers: { 'Content-Type': 'application/json', 'X-Rhizomon': '1' },
       body: JSON.stringify(m.body),
     });
     if (!res.ok) {
@@ -632,7 +632,7 @@ requestAnimationFrame(frame);
 
 // Test and debugging hook, present only with ?debug in the URL.
 if (debug) {
-  window.__rhizome = {
+  window.__rhizomon = {
     nodeMap,
     reheat: () => graph.d3ReheatSimulation(),
     screenOf: (id) => { const n = nodeMap.get(id); return graph.graph2ScreenCoords(n.x, n.y, n.z); },
@@ -658,7 +658,7 @@ if (debug && params.has('faketraffic')) {
   };
   const feedTimer = setInterval(feed, 1000);
   setTimeout(feed, 600);
-  if (window.__rhizome) window.__rhizome.pauseFake = () => clearInterval(feedTimer); // lets a test see the stale state
+  if (window.__rhizomon) window.__rhizomon.pauseFake = () => clearInterval(feedTimer); // lets a test see the stale state
 } else if (!demoMode) {
   fetch('/api/traffic', { headers: { Accept: 'application/json' } })
     .then((res) => (res.ok ? res.json().then((j) => trafficUI.push(j)) : trafficUI.markMissing()))

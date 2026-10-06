@@ -4,12 +4,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use rhizome::discovery::arp_parse::ArpEntry;
-use rhizome::model::HostInfo;
-use rhizome::net::iface_select::Selected;
-use rhizome::scanner::{Collected, Collector, Scanner, ScannerConfig};
-use rhizome::state::hub::Hub;
-use rhizome::traffic::TrafficHub;
+use rhizomon::discovery::arp_parse::ArpEntry;
+use rhizomon::model::HostInfo;
+use rhizomon::net::iface_select::Selected;
+use rhizomon::scanner::{Collected, Collector, Scanner, ScannerConfig};
+use rhizomon::state::hub::Hub;
+use rhizomon::traffic::TrafficHub;
 
 fn sel() -> Selected {
     Selected {

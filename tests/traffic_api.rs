@@ -8,9 +8,9 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use common::*;
 use http_body_util::BodyExt;
-use rhizome::state::hub::Hub;
-use rhizome::traffic::{DeviceTraffic, Sample, TrafficHub, WanTraffic};
-use rhizome::web::{AppState, router};
+use rhizomon::state::hub::Hub;
+use rhizomon::traffic::{DeviceTraffic, Sample, TrafficHub, WanTraffic};
+use rhizomon::web::{AppState, router};
 use tokio_util::sync::CancellationToken;
 
 fn app(traffic: Arc<TrafficHub>) -> axum::Router {
@@ -128,7 +128,7 @@ async fn traffic_is_read_only() {
             .uri("/api/traffic")
             .header("host", HOST)
             .header("origin", "http://127.0.0.1:7878")
-            .header("x-rhizome", "1")
+            .header("x-rhizomon", "1")
             .body(Body::empty())
             .unwrap();
         assert_eq!(
@@ -192,7 +192,7 @@ async fn device_events_still_flow_alongside_traffic_events() {
         .unwrap();
     let mut body = res.into_body();
     let _ = next_chunk(&mut body).await;
-    devices.publish(rhizome::model::DeviceEvent::Upsert(Box::new(device(
+    devices.publish(rhizomon::model::DeviceEvent::Upsert(Box::new(device(
         "192.168.0.9",
         "aa:bb:cc:dd:ee:09",
         false,

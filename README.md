@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="ui/logo.svg" width="96" alt="Rhizome logo">
+  <img src="ui/logo.svg" width="96" alt="Rhizomon logo">
 </p>
 
-# Rhizome
+# Rhizomon
 
-**Rhizome is a local network mapper for macOS. It scans the network you are connected to
+**Rhizomon is a local network mapper for macOS. It scans the network you are connected to
 and draws it as a live 3D graph in your browser, with your router at the centre and every
 device around it.** It is a single Rust binary: run it, open a page on your own machine,
 and watch devices appear and disappear. Nothing leaves your computer: no cloud, no CDN, no
@@ -27,7 +27,7 @@ telemetry, no outbound internet traffic.
   summaries between this machine and each device. See [Traffic](#traffic-and-link-quality).
 - **macOS, Linux and Windows** builds (see [Platform support](#platform-support) for what has been
   tested where).
-- **Private by design:** the page is served on `127.0.0.1` only, and everything Rhizome sends stays
+- **Private by design:** the page is served on `127.0.0.1` only, and everything Rhizomon sends stays
   on your subnet (see [Security model](#security-model)).
 
 ## Run it
@@ -45,7 +45,7 @@ Useful flags (`cargo run -- --help` for all of them):
 | `--port` | 7878 | Web UI port (always on 127.0.0.1) |
 | `--iface` | auto | Interface to scan, e.g. `en0` |
 | `--interval` | 30 | Seconds between scans (minimum 10) |
-| `--db` | `~/Library/Application Support/rhizome/rhizome.db` | History database |
+| `--db` | `~/Library/Application Support/rhizomon/rhizomon.db` | History database |
 | `--no-tcp-probe` | off | Skip the TCP probe of silent hosts |
 | `--no-netbios` | off | Do not send NetBIOS node-status queries (UDP 137) to hosts |
 | `--no-dns` | off | Do not send reverse-DNS (PTR) queries to the gateway |
@@ -70,27 +70,27 @@ Only scan networks you are allowed to scan.
 | Local Network hint | yes (macOS only) | n/a | n/a |
 | Link info | Wi-Fi: rate, signal, noise, channel, PHY; Ethernet: speed | Ethernet speed; Wi-Fi signal and noise (no rate) | Wi-Fi via `netsh` (English only); adapter speed |
 | Packet capture (`--capture`) | via `tcpdump` | via `tcpdump` | not available |
-| Data directory | `~/Library/Application Support/rhizome` | `~/.local/share/rhizome` | `%APPDATA%\rhizome\data` |
+| Data directory | `~/Library/Application Support/rhizomon` | `~/.local/share/rhizomon` | `%APPDATA%\rhizomon\data` |
 
 Linux and Windows are written against fixtures and format documentation and are type-checked and
 unit-tested on all three systems in CI, but **nobody has run them against a real Linux or Windows
 network yet**. Expect rough edges, and please report them. Per-OS notes:
 
 - **Linux:** unprivileged ICMP needs your group in `net.ipv4.ping_group_range`
-  (for example `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`). Without it Rhizome falls back to
+  (for example `sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"`). Without it Rhizomon falls back to
   the system `ping`, which is slower and says so in the status bar. Capture needs `tcpdump` and the
   capability described below.
 - **Windows:** the first run may trigger a firewall prompt for network access; allow private networks.
-  Rhizome never needs administrator rights. There is no packet capture on Windows (it would need the
+  Rhizomon never needs administrator rights. There is no packet capture on Windows (it would need the
   Npcap driver, which is not bundled). Database files rely on the per-user profile's access rules
   rather than Unix modes.
 - **macOS:** see the Local Network note below.
 - **Executables** (`arp`, `ping`, `tcpdump`, `netsh`, ...) are only ever taken from fixed absolute paths,
   never searched for through `PATH`.
 
-## What Rhizome collects, and how
+## What Rhizomon collects, and how
 
-Each cycle (default every 30 seconds) Rhizome picks the active LAN interface and gathers:
+Each cycle (default every 30 seconds) Rhizomon picks the active LAN interface and gathers:
 
 | Source | Gives you | Notes |
 |---|---|---|
@@ -130,21 +130,21 @@ Names and notes are yours: they are never set or changed by anything learned fro
 
 ```sh
 curl -X PUT http://127.0.0.1:7878/api/devices/02%3A21%3A49%3Ab8%3A2c%3A62/meta \
-  -H 'Origin: http://127.0.0.1:7878' -H 'X-Rhizome: 1' -H 'Content-Type: application/json' \
+  -H 'Origin: http://127.0.0.1:7878' -H 'X-Rhizomon: 1' -H 'Content-Type: application/json' \
   -d '{"custom_name": "Living room TV", "notes": "remote is in the drawer"}'
 ```
 
 - The device id (a MAC, or `mac@ip` for devices sharing a MAC) goes in the URL, percent-encoded.
 - `custom_name` is at most 64 characters, `notes` at most 500. `null` or an empty string clears a field;
   a field you leave out is left unchanged.
-- The request must carry an `Origin` header that matches the page's own origin and `X-Rhizome: 1`,
+- The request must carry an `Origin` header that matches the page's own origin and `X-Rhizomon: 1`,
   otherwise it is refused with 403. Unknown ids get 404, malformed bodies 400, bodies over 4 KB 413.
 - The response is the updated device. The change is pushed to every open page and saved in SQLite
   per network, so it survives restarts.
 
 ## Traffic and link quality
 
-Rhizome publishes one measurement sample per second (`GET /api/traffic`, and as a `traffic` event on the
+Rhizomon publishes one measurement sample per second (`GET /api/traffic`, and as a `traffic` event on the
 `/api/events` stream). Everything in it may be `null` when a source is unavailable.
 
 **Always on, no extra privileges:**
@@ -152,12 +152,12 @@ Rhizome publishes one measurement sample per second (`GET /api/traffic`, and as 
 | Measurement | Source | Notes |
 |---|---|---|
 | Host download/upload rate | the selected interface's byte counters | macOS counters are 32-bit and wrap every few minutes at load; the rate maths handles wrap and resets |
-| Link: kind, rate, signal, noise, channel, PHY | macOS: `networksetup`, `ifconfig` media line, and `system_profiler` for Wi-Fi; Linux: sysfs and `/proc/net/wireless`; Windows: `netsh wlan` | `system_profiler` takes several seconds, so Wi-Fi details are read slowly (about once a minute) in the background and never delay a sample. macOS shows no network *name* without Location permission; Rhizome does not need or use it |
-| WAN download/upload rate | the router's UPnP IGD counters (`GetTotalBytesReceived/Sent`) | Only if the router implements them and `--no-upnp` is not set. Many routers answer but report 0 forever (the one tested here does); Rhizome then reports `wan: null` rather than a misleading 0 |
+| Link: kind, rate, signal, noise, channel, PHY | macOS: `networksetup`, `ifconfig` media line, and `system_profiler` for Wi-Fi; Linux: sysfs and `/proc/net/wireless`; Windows: `netsh wlan` | `system_profiler` takes several seconds, so Wi-Fi details are read slowly (about once a minute) in the background and never delay a sample. macOS shows no network *name* without Location permission; Rhizomon does not need or use it |
+| WAN download/upload rate | the router's UPnP IGD counters (`GetTotalBytesReceived/Sent`) | Only if the router implements them and `--no-upnp` is not set. Many routers answer but report 0 forever (the one tested here does); Rhizomon then reports `wan: null` rather than a misleading 0 |
 | Per-device packet loss and jitter | the scan cycle's own ping sweep | One sample per device per scan, over a window of the last 20 scans; shown only once there are at least 3 samples. This is slow-moving link quality, not a live stream: with a 30-second interval the window spans ten minutes |
 
 **What is and is not visible, and why.** On a normal (switched) network this machine only ever sees its own traffic
-plus broadcast and multicast. Rhizome therefore cannot measure traffic *between two other devices*, or what each
+plus broadcast and multicast. Rhizomon therefore cannot measure traffic *between two other devices*, or what each
 device does on the internet, and it does not try (no ARP spoofing, no monitor mode, nothing that redirects other
 devices' traffic). Per-device throughput exists only for the traffic *between this machine and that device*, and only
 with capture on.
@@ -171,24 +171,24 @@ linked, so it does not affect the build for any platform.
   Remote (off-subnet) hosts are never recorded: all traffic to or from the internet becomes a single anonymous
   `other` flow on this machine's own node, and is not attributed to the gateway or any device (that would be browsing
   history). The flow list is capped at 64 entries per sample.
-- **Permissions.** Capture needs read access to the capture device. Rhizome never asks for, runs as, or escalates to root,
+- **Permissions.** Capture needs read access to the capture device. Rhizomon never asks for, runs as, or escalates to root,
   and never runs `sudo`; when capture cannot start it keeps running everything else, and `capture.available` is `false`
   with a `reason` that says what to do. The narrow grants:
   - **macOS:** read access to `/dev/bpf*` for your user. The usual way is Wireshark's ChmodBPF helper, which creates an
-    `access_bpf` group; add your user to it and restart Rhizome. (Without this, as on the development machine, capture
+    `access_bpf` group; add your user to it and restart Rhizomon. (Without this, as on the development machine, capture
     reports it is unavailable and tier 1 carries on.)
-  - **Linux:** give `tcpdump` (not Rhizome) the capability: `sudo setcap cap_net_raw,cap_net_admin=eip $(which tcpdump)`, or add
+  - **Linux:** give `tcpdump` (not Rhizomon) the capability: `sudo setcap cap_net_raw,cap_net_admin=eip $(which tcpdump)`, or add
     your user to the group your distribution uses for capture (often `pcap` or `wireshark`).
   - **Windows:** not available.
 
 ## macOS "Local Network" permission
 
 Since macOS 15, access to the local network is gated by a privacy permission that belongs
-to the app you launched Rhizome from (Terminal, iTerm, VS Code, ...), not to the binary.
-If it is denied, LAN traffic fails silently and the map will be nearly empty. Rhizome
+to the app you launched Rhizomon from (Terminal, iTerm, VS Code, ...), not to the binary.
+If it is denied, LAN traffic fails silently and the map will be nearly empty. Rhizomon
 detects this when the gateway cannot be reached, shows a banner in the UI and logs:
 
-> System Settings > Privacy & Security > Local Network: enable your terminal app, then restart rhizome.
+> System Settings > Privacy & Security > Local Network: enable your terminal app, then restart rhizomon.
 
 Visibility also depends on the network: guest and hotel Wi-Fi often isolate clients, so
 only the gateway is visible there. Phones that are asleep stop answering and show as
@@ -196,7 +196,7 @@ offline; that is expected.
 
 ## Security model
 
-Rhizome is a localhost-only service that handles data supplied by whoever is on your LAN,
+Rhizomon is a localhost-only service that handles data supplied by whoever is on your LAN,
 so it is defensive in both directions.
 
 - **Loopback only.** The listener is hardcoded to `127.0.0.1`; there is no flag to change it.
@@ -204,9 +204,9 @@ so it is defensive in both directions.
   with 403 any request whose `Host` is not exactly `127.0.0.1:<port>` or `localhost:<port>`, and any
   request carrying an `Origin` other than those same origins (including `null`) or a
   `Sec-Fetch-Site` other than `same-origin`/`none`. No CORS headers are ever sent. `localhost` is
-  still accepted as a Host, but the only URL Rhizome prints or documents is `http://127.0.0.1:<port>`.
+  still accepted as a Host, but the only URL Rhizomon prints or documents is `http://127.0.0.1:<port>`.
 - **The one state-changing endpoint.** `PUT /api/devices/{id}/meta` additionally requires an `Origin`
-  header that is present and exactly the page's own origin, plus the custom header `X-Rhizome: 1`
+  header that is present and exactly the page's own origin, plus the custom header `X-Rhizomon: 1`
   (a cross-origin page cannot send it without a preflight, which is never answered). The check runs
   before the body is read; bodies are capped at 4 KB, parsed strictly, length-limited and sanitised.
 - **Headers.** A strict Content-Security-Policy (`script-src 'self'`, `connect-src 'self'`,
@@ -239,7 +239,7 @@ so it is defensive in both directions.
 - **NetBIOS** queries are UDP unicast to in-subnet hosts, replies must come from the address *and port* that
   were asked and echo the transaction id, and `--no-netbios` turns the source off entirely.
 - **The three optional sources** (`--no-upnp`, `--no-dns`, `--no-netbios`) are independent; with all three set,
-  Rhizome sends nothing beyond the base scan (ping, ARP, mDNS and SSDP).
+  Rhizomon sends nothing beyond the base scan (ping, ARP, mDNS and SSDP).
 - **Subprocesses.** Only a short fixed list (`arp`, `ping`, plus `networksetup`, `ifconfig`, `system_profiler`
   on macOS, `netsh` on Windows, and `tcpdump` with `--capture`), each from a fixed absolute path (never looked up
   through `PATH`), with no shell, a minimal environment, a timeout and capped output. Arguments are fixed or a typed
@@ -256,7 +256,7 @@ so it is defensive in both directions.
   disables it.
 - **Capture mode (`--capture`).** Off by default. It reads headers only (`-s 96`), non-promiscuously, from the system
   `tcpdump`, keeps only counts by sender, receiver and protocol class, never stores or exposes payloads, and folds all
-  off-subnet traffic into one anonymous bucket (see [Traffic](#traffic-and-link-quality)). Rhizome does not escalate
+  off-subnet traffic into one anonymous bucket (see [Traffic](#traffic-and-link-quality)). Rhizomon does not escalate
   privileges; the OS grant applies to `tcpdump`.
 - **SQL and files.** Parameterised statements only. On Unix the database directory is created 0700 and the
   file is 0600; on Windows no mode bits exist, so the per-user profile directory's own access rules apply (nothing
@@ -293,7 +293,7 @@ so it is defensive in both directions.
   to be another device's name, model or type, which can change that device's guessed kind.
 - The SHA-256 values for the vendored JavaScript and the OUI list prove files have not drifted since
   they were fetched; they are not checked against a registry-signed value.
-- `--db` only tightens permissions on a directory Rhizome creates itself; it does not validate
+- `--db` only tightens permissions on a directory Rhizomon creates itself; it does not validate
   existing parent directories or refuse symlinks, so keep the database somewhere only you can write.
 - There is no age-based pruning: devices accumulate (up to the 2048 cap) and are never removed
   automatically, including old randomized-MAC "ghost" devices.

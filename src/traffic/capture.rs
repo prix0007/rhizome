@@ -4,7 +4,7 @@
 //! shell). Rationale: it needs no native link-time dependency, so the default
 //! build for all six release targets is unaffected, and the privilege grant
 //! applies to `tcpdump` (a BPF group on macOS, a file capability on Linux),
-//! never to rhizome itself.
+//! never to rhizomon itself.
 //!
 //! Privacy rules, enforced by the types here:
 //! * Only counts survive: bytes and packets by (sender, receiver, protocol
@@ -345,25 +345,25 @@ pub fn valid_iface_arg(name: &str) -> bool {
 pub fn unavailable_reason(os: crate::platform::Os, tool_found: bool, stderr: &str) -> String {
     use crate::platform::Os;
     if os == Os::Windows {
-        return "Packet capture is not available on Windows builds: it would need the Npcap driver, which Rhizome does not bundle. Everything else (host throughput, link info, loss and jitter) works without it.".to_string();
+        return "Packet capture is not available on Windows builds: it would need the Npcap driver, which Rhizomon does not bundle. Everything else (host throughput, link info, loss and jitter) works without it.".to_string();
     }
     if !tool_found {
         return match os {
             Os::Mac => "/usr/sbin/tcpdump was not found; capture needs the system tcpdump.".to_string(),
-            _ => "tcpdump was not found in the standard locations (/usr/bin, /usr/sbin, /sbin, /bin); install it with your package manager (for example `apt install tcpdump`), then restart rhizome.".to_string(),
+            _ => "tcpdump was not found in the standard locations (/usr/bin, /usr/sbin, /sbin, /bin); install it with your package manager (for example `apt install tcpdump`), then restart rhizomon.".to_string(),
         };
     }
     let first = crate::enrich::sanitize::sanitize(stderr.lines().next().unwrap_or(""));
     let lower = stderr.to_lowercase();
     if lower.contains("permission") || lower.contains("not permitted") || lower.contains("denied") {
         return match os {
-            Os::Mac => "macOS did not allow opening the packet capture device (/dev/bpf*). Give your user read access to it instead of running rhizome with elevated rights: install Wireshark's ChmodBPF helper (it creates an access_bpf group that can read /dev/bpf*) and add your user to that group, or make /dev/bpf* readable by your user, then restart rhizome.".to_string(),
-            _ => "The kernel denied raw packet access to tcpdump. Grant it to tcpdump only, not to rhizome: `sudo setcap cap_net_raw,cap_net_admin=eip $(which tcpdump)`, or add your user to the group your distribution uses for packet capture (often `pcap` or `wireshark`), then restart rhizome.".to_string(),
+            Os::Mac => "macOS did not allow opening the packet capture device (/dev/bpf*). Give your user read access to it instead of running rhizomon with elevated rights: install Wireshark's ChmodBPF helper (it creates an access_bpf group that can read /dev/bpf*) and add your user to that group, or make /dev/bpf* readable by your user, then restart rhizomon.".to_string(),
+            _ => "The kernel denied raw packet access to tcpdump. Grant it to tcpdump only, not to rhizomon: `sudo setcap cap_net_raw,cap_net_admin=eip $(which tcpdump)`, or add your user to the group your distribution uses for packet capture (often `pcap` or `wireshark`), then restart rhizomon.".to_string(),
         };
     }
     if lower.contains("no such device") || lower.contains("no suitable device") {
         return format!(
-            "tcpdump could not find the selected network interface ({first}); capture follows the interface rhizome scans (see --iface)."
+            "tcpdump could not find the selected network interface ({first}); capture follows the interface rhizomon scans (see --iface)."
         );
     }
     format!("tcpdump could not start capture: {first}")
@@ -899,7 +899,7 @@ mod tests {
         assert!(r.contains("/dev/bpf"), "{r}");
         assert!(r.contains("access_bpf") || r.contains("ChmodBPF"), "{r}");
         assert!(
-            !r.to_lowercase().contains("run rhizome as root") && !r.contains("sudo rhizome"),
+            !r.to_lowercase().contains("run rhizomon as root") && !r.contains("sudo rhizomon"),
             "{r}"
         );
     }
@@ -913,7 +913,7 @@ mod tests {
         );
         assert!(r.contains("cap_net_raw"), "{r}");
         assert!(r.contains("tcpdump"), "{r}");
-        assert!(!r.to_lowercase().contains("run rhizome as root"), "{r}");
+        assert!(!r.to_lowercase().contains("run rhizomon as root"), "{r}");
     }
 
     #[test]

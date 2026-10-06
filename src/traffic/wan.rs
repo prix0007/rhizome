@@ -29,7 +29,7 @@ pub fn soap_request(ctl: &IgdControl, action: &str) -> Vec<u8> {
         svc = ctl.service_type
     );
     format!(
-        "POST {path} HTTP/1.0\r\nHost: {ip}:{port}\r\nUser-Agent: rhizome\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: \"{svc}#{action}\"\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.0\r\nHost: {ip}:{port}\r\nUser-Agent: rhizomon\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: \"{svc}#{action}\"\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
         path = ctl.path,
         ip = ctl.ip,
         port = ctl.port,
