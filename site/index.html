@@ -120,9 +120,12 @@ cd rhizomon-*-pc-windows-msvc
 .\rhizomon.exe</pre>
   <p class="lede">The binary is not code-signed, so SmartScreen may show "Windows protected your PC": choose More info, then Run anyway. Allow it on private networks if Windows Firewall asks.</p>
   <h3>From source</h3>
-  <pre>git clone https://github.com/__REPO__.git
+  <p class="lede">Needs git and a Rust toolchain (1.85 or newer). Install Rust with <a href="https://rustup.rs" rel="noopener">rustup</a>; on Windows it also asks for the Visual Studio C++ build tools, and on Linux you need a C compiler (<code>build-essential</code> or equivalent) for the bundled SQLite.</p>
+  <pre>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # macOS / Linux; Windows: run rustup-init.exe
+git clone https://github.com/__REPO__.git
 cd rhizomon
 cargo run --release</pre>
+  <p class="lede">The first build takes a few minutes. The UI is embedded in the binary, so no Node or npm is needed.</p>
 
   <h2>What it does</h2>
   <ul>
