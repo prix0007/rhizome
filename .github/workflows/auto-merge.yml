@@ -1,24 +1,44 @@
 name: Auto-merge maintainer PRs
 
-# Pull requests opened by the repository owner are squash-merged automatically
-# once the required CI checks pass. Nobody else can merge or enable auto-merge
-# (only the owner has write access), so everyone else's PRs wait for the
-# owner's review. CI for outside contributors also needs the owner's approval
-# before it runs (repository Actions setting).
+# When CI finishes green on a pull request opened by the repository owner,
+# squash-merge it. Nobody else can merge (only the owner has write access), so
+# everyone else's PRs wait for the owner's review, and CI for outside
+# contributors needs the owner's approval before it runs (repository Actions
+# setting).
+#
+# A merge made with the workflow token does not trigger other workflows, so
+# this job starts the post-merge ones (CI on main, site deploy) explicitly.
 on:
-  pull_request:
-    types: [opened, reopened, ready_for_review]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
-  enable:
-    if: github.event.pull_request.user.login == github.repository_owner && !github.event.pull_request.draft
+  merge:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          merged=0
+          for pr in $(gh pr list --repo "$REPO" --state open --author "$OWNER" \
+              --json number,isDraft,headRefOid,isCrossRepository \
+              --jq ".[] | select(.headRefOid == \"$SHA\" and (.isDraft | not) and (.isCrossRepository | not)) | .number"); do
+            echo "merging #$pr"
+            gh pr merge "$pr" --repo "$REPO" --squash --delete-branch
+            merged=1
+          done
+          if [ "$merged" = 1 ]; then
+            gh workflow run ci.yml --repo "$REPO" --ref main
+            gh workflow run pages.yml --repo "$REPO" --ref main
+          fi
