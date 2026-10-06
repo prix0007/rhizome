@@ -143,6 +143,17 @@ cargo run --release</pre>
   </ul>
   <p class="lede">Only scan networks you own or are allowed to scan.</p>
 
+  <h2 id="security">Security</h2>
+  <p class="lede">
+    Rhizomon listens on 127.0.0.1 only, makes no outbound internet requests, and renders every string from the network as
+    plain text. The code is reviewed against that model, and the findings are published in full rather than summarised:
+  </p>
+  <ul>
+    <li><a href="https://github.com/__REPO__/blob/main/docs/SECURITY-REVIEW-2026-10.md">Security review, October 2026</a>: scope, threat model, every finding with its severity and status, and the controls verified.</li>
+    <li><a href="https://github.com/__REPO__#security-model">Security model</a> and <a href="https://github.com/__REPO__#known-limitations">known limitations</a> in the README.</li>
+    <li>Found something? Open an issue, or use GitHub's private vulnerability reporting on the repository if it is sensitive.</li>
+  </ul>
+
   <h2 id="support">Buy me a coffee</h2>
   <p class="lede">Rhizomon is free, open-source software built by one maintainer. If it helps you, a voluntary donation in <strong>ETH on Ethereum mainnet</strong> goes toward hosting and development.</p>
   <div class="card" id="donate">
@@ -158,7 +169,7 @@ cargo run --release</pre>
     <li>Not using a wallet? Starring the <a href="https://github.com/__REPO__">repository</a> or reporting a bug helps too.</li>
   </ul>
 
-  <footer><a href="#support">☕ Buy me a coffee</a> · Rhizomon is open source. <a href="https://github.com/__REPO__">github.com/__REPO__</a></footer>
+  <footer><a href="#support">☕ Buy me a coffee</a> · <a href="#security">Security</a> · Rhizomon is open source. <a href="https://github.com/__REPO__">github.com/__REPO__</a></footer>
 </main>
 <script>
   (function () {
