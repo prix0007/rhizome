@@ -32,8 +32,15 @@ telemetry, no outbound internet traffic.
 
 ## Run it
 
+**Prebuilt binaries** for macOS, Linux and Windows are on the [downloads page](https://rhizomon.com/), with per-OS instructions.
+
+**From source** you need git and a Rust toolchain, 1.85 or newer. Install Rust with [rustup](https://rustup.rs); on Windows it also asks for the Visual Studio C++ build tools, and on Linux you need a C compiler (`build-essential` or equivalent) for the bundled SQLite. No Node or npm is needed; the UI is embedded in the binary.
+
 ```sh
-cargo run --release        # or just `cargo run`
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # macOS / Linux; on Windows run rustup-init.exe
+git clone https://github.com/prix0007/rhizomon.git
+cd rhizomon
+cargo run --release        # or just `cargo run`; the first build takes a few minutes
 ```
 
 Then open <http://127.0.0.1:7878>. Click a node to see its details; the camera flies to it.
