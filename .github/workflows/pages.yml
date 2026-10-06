@@ -1,45 +1,69 @@
 name: Pages
 
-# Publishes site/ (the downloads page) to GitHub Pages.
+# Builds the static site and commits it to the gh-pages branch, which GitHub
+# Pages serves directly. The branch is regenerated as a single commit each
+# time so release binaries do not accumulate in the repository history.
+#
+# Contents of gh-pages:
+#   index.html, logo.svg        the downloads page (from site/)
+#   demo/                       the app UI in demo mode (from ui/)
+#   releases/latest/            the newest release's archives and checksums
 on:
   push:
     branches: [main]
-    paths: ["site/**", "ui/logo.svg", ".github/workflows/pages.yml"]
+    paths: ["site/**", "ui/**", ".github/workflows/pages.yml"]
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Assemble site
         env:
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
           NAME: ${{ github.event.repository.name }}
         run: |
-          mkdir _site
+          set -eu
+          mkdir -p _site/demo _site/releases/latest
           cp -R site/. _site/
           cp ui/logo.svg _site/logo.svg
+          cp -R ui/. _site/demo/
+          rm -rf _site/demo/tests
+          touch _site/.nojekyll
+          tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)
+          if [ -n "$tag" ]; then
+            gh release download "$tag" --repo "$REPO" --dir _site/releases/latest
+            echo "$tag" > _site/releases/latest/VERSION
+            mkdir -p "_site/releases/$tag"
+            cp _site/releases/latest/* "_site/releases/$tag/"
+          else
+            echo "no release yet" > _site/releases/latest/VERSION
+          fi
           page_url="https://${OWNER}.github.io/${NAME}/"
-          sed -i "s|__REPO__|${REPO}|g; s|__PAGE_URL__|${page_url}|g" _site/index.html
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          sed -i "s|__REPO__|${REPO}|g; s|__PAGE_URL__|${page_url}|g; s|__VERSION__|${tag:-none}|g" _site/index.html
+          du -sh _site
+      - name: Commit to gh-pages
+        env:
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build site from ${SHA}"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${REPO}.git" gh-pages

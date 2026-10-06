@@ -35,6 +35,27 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - run: cargo test --locked
 
+  # Release-profile build of the app on every push, kept as a workflow
+  # artifact so any commit can be tried without cutting a release.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rhizome-${{ matrix.os }}
+          path: |
+            target/release/rhizome
+            target/release/rhizome.exe
+          if-no-files-found: error
+          retention-days: 14
+
   ui:
     runs-on: ubuntu-latest
     steps:
