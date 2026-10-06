@@ -1,8 +1,10 @@
 name: Auto-merge maintainer PRs
 
 # Pull requests opened by the repository owner are squash-merged automatically
-# once the required CI checks pass. Everyone else's PRs wait for the owner's
-# review, as the branch ruleset requires.
+# once the required CI checks pass. Nobody else can merge or enable auto-merge
+# (only the owner has write access), so everyone else's PRs wait for the
+# owner's review. CI for outside contributors also needs the owner's approval
+# before it runs (repository Actions setting).
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
