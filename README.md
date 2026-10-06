@@ -327,6 +327,19 @@ so it is defensive in both directions.
   common `dBm = pct/2 - 100` approximation, and the Windows Wi-Fi source reads English `netsh` labels only. Without
   capture there is no per-device throughput at all, and with capture only traffic to or from this machine is seen.
 
+## Support the project
+
+Rhizomon is free, open-source software. If it helps you, you can send a voluntary donation in **ETH on Ethereum mainnet** (chain ID 1) to:
+
+```
+0xfb4172e26AC8735C06656f1df14151cFe8441481
+```
+
+- **Check the address.** It is also shown on [rhizomon.com/#support](https://rhizomon.com/#support). Before you send, check that the address there matches this README character for character.
+- **Use the right network and asset.** Send only ETH on Ethereum mainnet. Tokens, or ETH on other networks, sent to this address may be lost.
+- **What donations fund:** hosting and development.
+- **Terms:** donations are non-refundable and come with no perks, goods or services. This is an open-source project with no company behind it, so there are no tax receipts.
+
 ## License
 
 MIT; see [LICENSE](LICENSE).
