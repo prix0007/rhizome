@@ -20,6 +20,7 @@ import {
   toGraphData,
   upsertDevice,
 } from './graph-model.js';
+import { shouldUseDemo } from './mode.js';
 import { createLabels } from './labels.js';
 import { chatterEmitters, fakeSample, trafficGroup } from './traffic.js';
 import { createTrafficUI, initCollapsibles } from './traffic-ui.js';
@@ -42,6 +43,14 @@ const editReset = document.getElementById('edit-reset');
 const editMsg = document.getElementById('edit-msg');
 const params = new URLSearchParams(location.search);
 const debug = params.has('debug');
+// Demo mode: served by something other than the local agent (e.g. GitHub Pages), or ?demo. Nothing then calls /api/.
+const demoMode = shouldUseDemo(location.origin, location.search);
+if (demoMode) {
+  document.body.classList.add('demo');
+  document.getElementById('demo-banner').hidden = false;
+}
+const demo = demoMode ? (await import('./demo.js')).createDemo() : null;
+const apiFetch = demo ? demo.fetch : (...args) => fetch(...args);
 const nodeMap = new Map();
 const calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -367,7 +376,7 @@ editForm.addEventListener('submit', async (ev) => {
   editSave.disabled = true;
   setMsg('Saving...', '');
   try {
-    const res = await fetch(metaUrl(d.id), {
+    const res = await apiFetch(metaUrl(d.id), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Rhizome': '1' },
       body: JSON.stringify(m.body),
@@ -511,7 +520,7 @@ function showStatus(s) {
   renderBanners([...(s.warnings || [])]);
 }
 
-const es = new EventSource('/api/events');
+const es = demo ? demo.source : new EventSource('/api/events');
 es.addEventListener('snapshot', (e) => {
   const snap = JSON.parse(e.data);
   const r = reconcile(nodeMap, snap.devices);
@@ -549,6 +558,10 @@ function updateExclusions() {
   const rects = [];
   const hud = document.getElementById('hud').getBoundingClientRect();
   rects.push({ x: hud.left - 6, y: hud.top - 6, w: hud.width + 12, h: hud.height + 12 });
+  if (demoMode) {
+    const b = document.getElementById('demo-banner').getBoundingClientRect();
+    rects.push({ x: 0, y: 0, w: window.innerWidth, h: b.bottom + 6 });
+  }
   if (panel.classList.contains('open')) rects.push({ x: window.innerWidth - 14 - 320 - 6, y: 8, w: 332, h: panel.offsetHeight + 12 });
   labels.setExclusions(rects);
 }
@@ -629,6 +642,7 @@ if (debug) {
     linkUnit: () => linkUnit,
     camera: () => graph.camera().position.toArray(),
     traffic: () => trafficUI.current(),
+    demoMode,
   };
 }
 
@@ -645,7 +659,7 @@ if (debug && params.has('faketraffic')) {
   const feedTimer = setInterval(feed, 1000);
   setTimeout(feed, 600);
   if (window.__rhizome) window.__rhizome.pauseFake = () => clearInterval(feedTimer); // lets a test see the stale state
-} else {
+} else if (!demoMode) {
   fetch('/api/traffic', { headers: { Accept: 'application/json' } })
     .then((res) => (res.ok ? res.json().then((j) => trafficUI.push(j)) : trafficUI.markMissing()))
     .catch(() => trafficUI.markMissing());

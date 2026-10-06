@@ -146,3 +146,12 @@ body { background: radial-gradient(120% 95% at 50% 46%, #0d1f1d 0%, #07130f 38%,
 #panel-traffic dt { color: var(--dim); }
 #panel-traffic dd { margin: 0; word-break: break-all; }
 #panel-traffic dt.group { grid-column: 1 / -1; padding-bottom: 2px; border-bottom: 1px solid var(--hair); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); }
+
+/* Demo mode: a permanent strip across the top; the rest of the chrome moves down to make room */
+#demo-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 5; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; padding: 7px 14px; font-size: 11.5px; color: #ffe2c2; background: rgba(54, 28, 10, 0.94); border-bottom: 1px solid rgba(255, 154, 61, 0.55); }
+#demo-banner[hidden] { display: none; }
+#demo-banner a { color: #ffc247; text-decoration: underline; text-underline-offset: 2px; }
+#demo-banner a:focus-visible { outline: 1px solid #ffc247; outline-offset: 2px; }
+body.demo #hud { top: 52px; max-height: calc(100vh - 114px); }
+body.demo #panel { top: 52px; max-height: calc(100vh - 66px); }
+@media (max-width: 700px) { body.demo #hud { top: 70px; max-height: calc(100vh - 132px); } body.demo #panel { top: 70px; } }
